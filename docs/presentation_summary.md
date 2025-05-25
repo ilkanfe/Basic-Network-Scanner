@@ -40,4 +40,4 @@ Ağ üzerindeki cihazları, açık portları, çalışan servisleri ve işletim 
 - Hatice BİÇEN
 
 ## Soru & Cevap
-Sorularınız için: [email@example.com] 
+Sorularınız için: [uoilkan@gmail.com] 

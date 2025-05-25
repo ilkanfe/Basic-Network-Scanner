@@ -1,0 +1,6 @@
+scapy: ✓ Başarıyla yüklendi
+nmap: ✓ Başarıyla yüklendi
+matplotlib: ✓ Başarıyla yüklendi
+plotly: ✓ Başarıyla yüklendi
+flask: ✓ Başarıyla yüklendi
+tkinter: ✓ Başarıyla yüklendi

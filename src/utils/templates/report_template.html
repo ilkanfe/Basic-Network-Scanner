@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ağ Tarama Raporu</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        .section h2 {
+            color: #2c3e50;
+            margin-top: 0;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+        
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .stat-card {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        
+        .stat-card h3 {
+            margin: 0;
+            color: #2c3e50;
+        }
+        
+        .stat-card p {
+            margin: 10px 0 0;
+            font-size: 24px;
+            font-weight: bold;
+            color: #3498db;
+        }
+        
+        .security-issue {
+            padding: 10px;
+            margin: 10px 0;
+            border-left: 4px solid #e74c3c;
+            background-color: #fdf7f7;
+        }
+        
+        .security-issue.high {
+            border-left-color: #e74c3c;
+        }
+        
+        .security-issue.medium {
+            border-left-color: #f39c12;
+        }
+        
+        .security-issue.low {
+            border-left-color: #3498db;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px;
+            color: #666;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Ağ Tarama Raporu</h1>
+            <p>Oluşturulma Tarihi: {{ timestamp }}</p>
+        </div>
+        
+        <div class="section">
+            <h2>Tarama Özeti</h2>
+            <div class="stats">
+                <div class="stat-card">
+                    <h3>Hedef</h3>
+                    <p>{{ scan_results.target }}</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Toplam Host</h3>
+                    <p>{{ scan_results.stats.total_hosts }}</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Aktif Host</h3>
+                    <p>{{ scan_results.stats.active_hosts }}</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Tarama Süresi</h3>
+                    <p>{{ "%.2f"|format(scan_results.stats.scan_duration) }} saniye</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>İşletim Sistemi Dağılımı</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>İşletim Sistemi</th>
+                        <th>Host Sayısı</th>
+                        <th>Ortalama Güven</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for os_name, stats in scan_results.analysis.os_distribution.items() %}
+                    <tr>
+                        <td>{{ os_name }}</td>
+                        <td>{{ stats.count }}</td>
+                        <td>{{ "%.2f"|format(stats.confidence_avg) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>Port Analizi</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Port</th>
+                        <th>Açık</th>
+                        <th>Kapalı</th>
+                        <th>Filtrelenmiş</th>
+                        <th>Servisler</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for port, stats in scan_results.analysis.port_analysis.items() %}
+                    <tr>
+                        <td>{{ port }}</td>
+                        <td>{{ stats.open }}</td>
+                        <td>{{ stats.closed }}</td>
+                        <td>{{ stats.filtered }}</td>
+                        <td>{{ stats.services|join(', ') }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>Güvenlik Analizi</h2>
+            <div class="stats">
+                <div class="stat-card">
+                    <h3>Toplam Sorun</h3>
+                    <p>{{ scan_results.analysis.security_analysis.total_issues }}</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Etkilenen Host</h3>
+                    <p>{{ scan_results.analysis.security_analysis.hosts_with_issues }}</p>
+                </div>
+            </div>
+            
+            {% for host in scan_results.analysis.security_analysis.detailed_issues %}
+            <h3>Host: {{ host.ip }}</h3>
+            {% for issue in host.issues %}
+            <div class="security-issue {{ issue.severity }}">
+                <strong>{{ issue.type|title }}</strong>
+                <p>{{ issue.description }}</p>
+                {% if issue.port %}
+                <p>Port: {{ issue.port }}</p>
+                {% endif %}
+                {% if issue.service %}
+                <p>Servis: {{ issue.service }}</p>
+                {% endif %}
+                {% if issue.version %}
+                <p>Versiyon: {{ issue.version }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% endfor %}
+        </div>
+        
+        <div class="section">
+            <h2>Detaylı Host Bilgileri</h2>
+            {% for host in scan_results.hosts %}
+            <h3>Host: {{ host.ip }}</h3>
+            <p>İşletim Sistemi: {{ host.os_info.name }} (Güven: {{ "%.2f"|format(host.os_info.confidence) }})</p>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>Port</th>
+                        <th>Durum</th>
+                        <th>Servis</th>
+                        <th>Versiyon</th>
+                        <th>Banner</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for port, info in host.ports.items() %}
+                    <tr>
+                        <td>{{ port }}</td>
+                        <td>{{ info.state }}</td>
+                        <td>{{ info.service.name }}</td>
+                        <td>{{ info.service.version }}</td>
+                        <td>{{ info.service.banner }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endfor %}
+        </div>
+        
+        <div class="footer">
+            <p>Bu rapor otomatik olarak oluşturulmuştur.</p>
+        </div>
+    </div>
+</body>
+</html> 

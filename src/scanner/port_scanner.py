@@ -1,0 +1,383 @@
+from scapy.all import *
+import ipaddress
+import logging
+from typing import List, Dict, Tuple
+import time
+from src.utils.logger import setup_logger
+from src.utils.error_utils import handle_error
+from src.utils.platform_utils import is_windows, get_platform_specific_command
+import os
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import socket
+
+class PortScanner:
+    def __init__(self, timeout: float = 1.0, max_workers: int = 50):
+        """
+        Port tarayıcı sınıfı başlatıcısı.
+        
+        Args:
+            timeout (float): Port tarama timeout süresi (saniye)
+            max_workers (int): Maksimum eşzamanlı tarama sayısı
+        """
+        self.logger = setup_logger(__name__)
+        self.timeout = timeout
+        self.max_workers = max_workers
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.scan_results = {}
+        
+    def scan_ip_range(self, ip_range: str) -> List[str]:
+        """
+        Belirtilen IP aralığındaki aktif hostları tarar.
+        
+        Args:
+            ip_range (str): CIDR formatında IP aralığı (örn: '192.168.1.0/24')
+            
+        Returns:
+            List[str]: Aktif hostların IP adresleri listesi
+        """
+        try:
+            network = ipaddress.ip_network(ip_range)
+            active_hosts = []
+            
+            for ip in network.hosts():
+                ip_str = str(ip)
+                if is_windows():
+                    # Windows'ta ICMP ping kullan
+                    ping_cmd = get_platform_specific_command('ping')
+                    response = os.system(f"{ping_cmd} {ip_str} > nul")
+                    if response == 0:
+                        active_hosts.append(ip_str)
+                        self.logger.info(f"Aktif host bulundu: {ip_str}")
+                else:
+                    # Linux'ta ARP ping kullan
+                    arp_request = ARP(pdst=ip_str)
+                    broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
+                    arp_request_broadcast = broadcast/arp_request
+                    answered_list = srp(arp_request_broadcast, timeout=1, verbose=False)[0]
+                    if answered_list:
+                        active_hosts.append(ip_str)
+                        self.logger.info(f"Aktif host bulundu: {ip_str}")
+            
+            return active_hosts
+            
+        except Exception as e:
+            error_msg = f"IP aralığı taraması başarısız oldu: {str(e)}"
+            handle_error(self.logger, error_msg)
+            raise ValueError(f"IP aralığı taraması başarısız oldu: {str(e)}")
+    
+    async def scan_ports(self, target: str, start_port: int, end_port: int, scan_type: str = "syn") -> Dict[int, str]:
+        """
+        Belirtilen port aralığını tarar.
+        
+        Args:
+            target (str): Hedef IP adresi
+            start_port (int): Başlangıç portu
+            end_port (int): Bitiş portu
+            scan_type (str): Tarama tipi ("syn" veya "tcp")
+            
+        Returns:
+            Dict[int, str]: Port numaraları ve durumları
+        """
+        self.logger.info(f"Port taraması başlatılıyor: {target} ({start_port}-{end_port})")
+        
+        try:
+            # Port aralığını kontrol et
+            if not (1 <= start_port <= 65535 and 1 <= end_port <= 65535):
+                raise ValueError("Port numaraları 1-65535 arasında olmalıdır")
+            if start_port > end_port:
+                raise ValueError("Başlangıç portu bitiş portundan büyük olamaz")
+                
+            # Port listesini oluştur
+            ports = list(range(start_port, end_port + 1))
+            self.logger.info(f"Taranacak port sayısı: {len(ports)}")
+            
+            # Portları gruplara böl
+            port_groups = [ports[i:i + self.max_workers] for i in range(0, len(ports), self.max_workers)]
+            
+            results = {}
+            total_ports = len(ports)
+            scanned_ports = 0
+            
+            for group in port_groups:
+                # Her grup için eşzamanlı tarama
+                tasks = [self.scan_port(target, port, scan_type) for port in group]
+                group_results = await asyncio.gather(*tasks)
+                
+                # Sonuçları birleştir
+                for port, state in zip(group, group_results):
+                    results[port] = state
+                    if state == "open":
+                        self.logger.info(f"Port {port} açık")
+                
+                # İlerleme durumunu güncelle
+                scanned_ports += len(group)
+                progress = (scanned_ports / total_ports) * 100
+                self.logger.info(f"Tarama ilerlemesi: {progress:.1f}% ({scanned_ports}/{total_ports})")
+            
+            self.logger.info(f"Port taraması tamamlandı. Açık port sayısı: {sum(1 for state in results.values() if state == 'open')}")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Port taraması sırasında hata: {str(e)}")
+            raise
+            
+    async def scan_port(self, target: str, port: int, scan_type: str = "syn") -> str:
+        """
+        Tek bir portu tarar.
+        
+        Args:
+            target (str): Hedef IP adresi
+            port (int): Port numarası
+            scan_type (str): Tarama tipi ("syn" veya "tcp")
+            
+        Returns:
+            str: Port durumu ("open", "closed", "filtered")
+        """
+        try:
+            if scan_type == "syn":
+                return await self._syn_scan(target, port)
+            elif scan_type == "tcp":
+                return await self._tcp_connect_scan(target, port)
+            else:
+                raise ValueError(f"Geçersiz tarama tipi: {scan_type}")
+                
+        except Exception as e:
+            self.logger.error(f"Port {port} taraması sırasında hata: {str(e)}")
+            return "filtered"
+            
+    async def _tcp_connect_scan(self, target: str, port: int) -> str:
+        """TCP Connect taraması yapar"""
+        try:
+            def scan():
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(self.timeout)
+                result = sock.connect_ex((target, port))
+                sock.close()
+                return "open" if result == 0 else "closed"
+                
+            return await asyncio.get_event_loop().run_in_executor(self.executor, scan)
+            
+        except Exception as e:
+            self.logger.warning(f"TCP tarama hatası (Port {port}): {str(e)}")
+            return "filtered"
+            
+    async def tcp_syn_scan(self, target_ip: str, ports: List[int]) -> Dict[int, str]:
+        """
+        TCP SYN taraması gerçekleştirir.
+        
+        Args:
+            target_ip (str): Hedef IP adresi
+            ports (List[int]): Taranacak port listesi
+            
+        Returns:
+            Dict[int, str]: Açık portlar ve durumları
+        """
+        open_ports = {}
+        
+        for port in ports:
+            syn_packet = IP(dst=target_ip)/TCP(dport=port, flags="S")
+            
+            try:
+                response = await asyncio.get_event_loop().run_in_executor(None, lambda: sr1(syn_packet, timeout=1, verbose=False))
+                
+                if response and response.haslayer(TCP):
+                    if response[TCP].flags == 0x12:  # SYN-ACK
+                        rst_packet = IP(dst=target_ip)/TCP(dport=port, flags="R")
+                        send(rst_packet, verbose=False)
+                        open_ports[port] = "open"
+                        self.logger.info(f"Port {port} açık")
+                
+            except Exception as e:
+                error_msg = f"Port {port} taraması başarısız oldu: {str(e)}"
+                handle_error(self.logger, error_msg)
+                
+        return open_ports
+    
+    async def udp_scan(self, target_ip: str, ports: List[int]) -> Dict[int, str]:
+        """
+        UDP taraması gerçekleştirir.
+        
+        Args:
+            target_ip (str): Hedef IP adresi
+            ports (List[int]): Taranacak port listesi
+            
+        Returns:
+            Dict[int, str]: Açık portlar ve durumları
+        """
+        open_ports = {}
+        
+        for port in ports:
+            udp_packet = IP(dst=target_ip)/UDP(dport=port)
+            
+            try:
+                response = await asyncio.get_event_loop().run_in_executor(None, lambda: sr1(udp_packet, timeout=1, verbose=False))
+                
+                if response is None:
+                    open_ports[port] = "open|filtered"
+                    self.logger.info(f"Port {port} açık veya filtrelenmiş")
+                elif response.haslayer(ICMP):
+                    if int(response[ICMP].type) == 3 and int(response[ICMP].code) == 3:
+                        open_ports[port] = "closed"
+                    elif int(response[ICMP].type) == 3 and int(response[ICMP].code) in [1,2,9,10,13]:
+                        open_ports[port] = "filtered"
+                
+            except Exception as e:
+                error_msg = f"Port {port} taraması başarısız oldu: {str(e)}"
+                handle_error(self.logger, error_msg)
+                
+        return open_ports
+    
+    def validate_ports(self, ports):
+        """Port numaralarının geçerli olup olmadığını kontrol eder."""
+        for port in ports:
+            if not (0 <= port <= 65535):
+                raise ValueError(f"Geçersiz port numarası: {port}")
+
+    def validate_ip(self, ip):
+        """IP adresinin geçerli olup olmadığını kontrol eder."""
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            raise ValueError(f"Geçersiz IP adresi: {ip}")
+
+    async def fin_scan(self, target_ip: str, ports: List[int]) -> Dict[int, str]:
+        """
+        FIN taraması gerçekleştirir. IDS/IPS sistemlerinden kaçınmak için kullanılır.
+        
+        Args:
+            target_ip (str): Hedef IP adresi
+            ports (List[int]): Taranacak port listesi
+            
+        Returns:
+            Dict[int, str]: Açık portlar ve durumları
+        """
+        open_ports = {}
+        
+        for port in ports:
+            fin_packet = IP(dst=target_ip)/TCP(dport=port, flags="F")
+            
+            try:
+                response = await asyncio.get_event_loop().run_in_executor(None, lambda: sr1(fin_packet, timeout=1, verbose=False))
+                
+                if response is None:
+                    open_ports[port] = "open|filtered"
+                    self.logger.info(f"Port {port} açık veya filtrelenmiş (FIN tarama)")
+                elif response.haslayer(ICMP):
+                    if int(response[ICMP].type) == 3 and int(response[ICMP].code) in [1,2,9,10,13]:
+                        open_ports[port] = "filtered"
+                
+            except Exception as e:
+                error_msg = f"Port {port} FIN taraması başarısız oldu: {str(e)}"
+                handle_error(self.logger, error_msg)
+                
+        return open_ports
+
+    async def xmas_scan(self, target_ip: str, ports: List[int]) -> Dict[int, str]:
+        """
+        XMAS taraması gerçekleştirir. FIN, PSH ve URG flaglerini kullanır.
+        
+        Args:
+            target_ip (str): Hedef IP adresi
+            ports (List[int]): Taranacak port listesi
+            
+        Returns:
+            Dict[int, str]: Açık portlar ve durumları
+        """
+        open_ports = {}
+        
+        for port in ports:
+            xmas_packet = IP(dst=target_ip)/TCP(dport=port, flags="FPU")
+            
+            try:
+                response = await asyncio.get_event_loop().run_in_executor(None, lambda: sr1(xmas_packet, timeout=1, verbose=False))
+                
+                if response is None:
+                    open_ports[port] = "open|filtered"
+                    self.logger.info(f"Port {port} açık veya filtrelenmiş (XMAS tarama)")
+                elif response.haslayer(ICMP):
+                    if int(response[ICMP].type) == 3 and int(response[ICMP].code) in [1,2,9,10,13]:
+                        open_ports[port] = "filtered"
+                
+            except Exception as e:
+                error_msg = f"Port {port} XMAS taraması başarısız oldu: {str(e)}"
+                handle_error(self.logger, error_msg)
+                
+        return open_ports
+
+    async def null_scan(self, target_ip: str, ports: List[int]) -> Dict[int, str]:
+        """
+        NULL taraması gerçekleştirir. Hiçbir flag kullanmaz.
+        
+        Args:
+            target_ip (str): Hedef IP adresi
+            ports (List[int]): Taranacak port listesi
+            
+        Returns:
+            Dict[int, str]: Açık portlar ve durumları
+        """
+        open_ports = {}
+        
+        for port in ports:
+            null_packet = IP(dst=target_ip)/TCP(dport=port, flags="")
+            
+            try:
+                response = await asyncio.get_event_loop().run_in_executor(None, lambda: sr1(null_packet, timeout=1, verbose=False))
+                
+                if response is None:
+                    open_ports[port] = "open|filtered"
+                    self.logger.info(f"Port {port} açık veya filtrelenmiş (NULL tarama)")
+                elif response.haslayer(ICMP):
+                    if int(response[ICMP].type) == 3 and int(response[ICMP].code) in [1,2,9,10,13]:
+                        open_ports[port] = "filtered"
+                
+            except Exception as e:
+                error_msg = f"Port {port} NULL taraması başarısız oldu: {str(e)}"
+                handle_error(self.logger, error_msg)
+                
+        return open_ports
+
+    async def scan_target(self, target_ip: str, ports: List[int], scan_type: str = "syn") -> Dict:
+        """
+        Hedef IP'yi belirtilen portlarda tarar.
+        
+        Args:
+            target_ip (str): Hedef IP adresi
+            ports (List[int]): Taranacak port listesi
+            scan_type (str): Tarama tipi
+            
+        Returns:
+            Dict: Tarama sonuçları
+        """
+        start_time = time.time()
+        results = {}
+        
+        # Portları gruplara böl
+        port_groups = [ports[i:i + self.max_workers] for i in range(0, len(ports), self.max_workers)]
+        
+        for group in port_groups:
+            # Her grup için eşzamanlı tarama
+            tasks = [self.scan_port(target_ip, port, scan_type) for port in group]
+            group_results = await asyncio.gather(*tasks)
+            
+            # Sonuçları birleştir
+            for result in group_results:
+                results.update(result)
+                
+        end_time = time.time()
+        
+        return {
+            'ip': target_ip,
+            'scan_type': scan_type,
+            'ports': results,
+            'scan_time': end_time - start_time,
+            'total_ports': len(ports),
+            'open_ports': len([p for p, s in results.items() if s == 'open']),
+            'closed_ports': len([p for p, s in results.items() if s == 'closed']),
+            'filtered_ports': len([p for p, s in results.items() if s == 'filtered']),
+            'error_ports': len([p for p, s in results.items() if s == 'error'])
+        }
+        
+    def __del__(self):
+        """ThreadPoolExecutor'ı temizle."""
+        self.executor.shutdown(wait=False)

@@ -86,26 +86,97 @@ class ServiceDetector:
         Returns:
             Dict: Servis bilgileri
         """
-        # Önbellekten kontrol et
-        cached_service = self._get_cached_service(target_ip, port, protocol)
-        if cached_service:
-            return cached_service
-            
         try:
-            # Nmap ile servis tespiti ve banner grabbing'i paralel yap
-            nmap_task = self._retry_with_backoff(self._nmap_scan, target_ip, [port])
-            banner_task = self._retry_with_backoff(self._banner_grab, target_ip, port, protocol)
+            # Önbellekten kontrol et
+            cached_service = self._get_cached_service(target_ip, port, protocol)
+            if cached_service:
+                return cached_service
+                
+            # Banner grabbing'i önce yap
+            banner = await self._banner_grab(target_ip, port, protocol)
             
-            nmap_result, banner = await asyncio.gather(nmap_task, banner_task)
-            
+            # Banner'ın sadece ilk satırını al
+            short_banner = banner.splitlines()[0] if banner else None
             service_info = {
-                'name': nmap_result.get('name', 'unknown'),
-                'product': nmap_result.get('product', 'unknown'),
-                'version': nmap_result.get('version', 'unknown'),
-                'state': nmap_result.get('state', 'unknown'),
-                'banner': banner,
+                'name': 'unknown',
+                'product': 'unknown',
+                'version': 'unknown',
+                'state': 'open',
+                'banner': short_banner,
                 'detection_time': time.time()
             }
+            
+            # Port'a göre varsayılan servis bilgileri
+            if port == 22:
+                service_info['name'] = 'ssh'
+                service_info['product'] = 'SSH'
+                if banner and 'SSH-2.0' in banner:
+                    service_info['version'] = banner.split('SSH-2.0-')[1].split()[0]
+            elif port == 80:
+                service_info['name'] = 'http'
+                service_info['product'] = 'HTTP'
+                if banner and 'Server:' in banner:
+                    service_info['version'] = banner.split('Server:')[1].split('\n')[0].strip()
+            elif port == 443:
+                service_info['name'] = 'https'
+                service_info['product'] = 'HTTPS'
+                if banner and 'Server:' in banner:
+                    service_info['version'] = banner.split('Server:')[1].split('\n')[0].strip()
+                elif banner == "HTTPS Service Detected":
+                    service_info['version'] = "SSL/TLS"
+            elif port == 53:
+                service_info['name'] = 'domain'
+                service_info['product'] = 'DNS'
+            elif port == 21:
+                service_info['name'] = 'ftp'
+                service_info['product'] = 'FTP'
+                if banner:
+                    service_info['version'] = banner.split()[0]
+            elif port == 25:
+                service_info['name'] = 'smtp'
+                service_info['product'] = 'SMTP'
+                if banner:
+                    service_info['version'] = banner.split()[0]
+            elif port == 135:
+                service_info['name'] = 'msrpc'
+                service_info['product'] = 'Microsoft RPC'
+                service_info['version'] = 'Windows'
+            elif port == 139:
+                service_info['name'] = 'netbios-ssn'
+                service_info['product'] = 'NetBIOS'
+                service_info['version'] = 'Windows'
+            elif port == 445:
+                service_info['name'] = 'microsoft-ds'
+                service_info['product'] = 'SMB'
+                service_info['version'] = 'Windows'
+            elif port == 3389:
+                service_info['name'] = 'rdp'
+                service_info['product'] = 'Remote Desktop'
+                service_info['version'] = 'Windows'
+            elif port == 1433:
+                service_info['name'] = 'ms-sql-s'
+                service_info['product'] = 'Microsoft SQL Server'
+                service_info['version'] = 'Windows'
+            elif port == 3306:
+                service_info['name'] = 'mysql'
+                service_info['product'] = 'MySQL'
+                if banner:
+                    service_info['version'] = banner.split()[0]
+            elif port == 5432:
+                service_info['name'] = 'postgresql'
+                service_info['product'] = 'PostgreSQL'
+                if banner:
+                    service_info['version'] = banner.split()[0]
+            elif port == 27017:
+                service_info['name'] = 'mongodb'
+                service_info['product'] = 'MongoDB'
+                if banner:
+                    service_info['version'] = banner.split()[0]
+            elif port == 8080:
+                service_info['name'] = 'http-proxy'
+                service_info['product'] = 'HTTP Proxy'
+                if banner and 'Server:' in banner:
+                    service_info['version'] = banner.split('Server:')[1].split('\n')[0].strip()
             
             # Önbelleğe kaydet
             self._cache_service(target_ip, port, protocol, service_info)
@@ -113,13 +184,11 @@ class ServiceDetector:
             return service_info
             
         except Exception as e:
-            error_msg = f"Servis tespiti başarısız oldu: {str(e)}"
-            handle_error(self.logger, error_msg)
             return {
                 'name': 'unknown',
                 'product': 'unknown',
                 'version': 'unknown',
-                'state': 'unknown',
+                'state': 'open',
                 'banner': None,
                 'detection_time': time.time()
             }
@@ -145,9 +214,6 @@ class ServiceDetector:
                 target
             ]
             
-            # Debug: Komutu göster
-            self.logger.info(f"Çalıştırılan Nmap komutu: {' '.join(cmd)}")
-            
             # Komutu çalıştır
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -157,12 +223,7 @@ class ServiceDetector:
             
             stdout, stderr = await process.communicate()
             
-            # Debug: Nmap çıktısını göster
-            output = stdout.decode('latin-1')
-            self.logger.info(f"Nmap çıktısı:\n{output}")
-            
             if process.returncode != 0:
-                self.logger.warning(f"Nmap servis tespiti hatası: {stderr.decode('latin-1')}")
                 return {}
             
             # Nmap çıktısını parse et
@@ -170,10 +231,7 @@ class ServiceDetector:
             current_port = None
             
             # Port ve servis bilgilerini bul
-            for line in output.split('\n'):
-                # Debug: Her satırı göster
-                self.logger.debug(f"İşlenen satır: {line}")
-                
+            for line in stdout.decode('latin-1').split('\n'):
                 # Port numarasını bul
                 if 'Discovered open port' in line:
                     try:
@@ -186,9 +244,7 @@ class ServiceDetector:
                             'state': 'open',
                             'banner': None
                         }
-                        self.logger.info(f"Port bulundu: {port}")
-                    except (ValueError, IndexError) as e:
-                        self.logger.warning(f"Port parse hatası: {str(e)}")
+                    except (ValueError, IndexError):
                         continue
                 
                 # Servis bilgilerini bul
@@ -198,16 +254,13 @@ class ServiceDetector:
                         service, version = info.split(';', 1)
                         results[current_port]['name'] = service.strip()
                         results[current_port]['version'] = version.strip()
-                        self.logger.info(f"Servis bilgisi bulundu: {service.strip()} - {version.strip()}")
                     else:
                         results[current_port]['name'] = info.strip()
-                        self.logger.info(f"Servis bilgisi bulundu: {info.strip()}")
                 
                 # Banner bilgisini bul
                 if current_port and 'Banner:' in line:
                     banner = line.split('Banner:')[1].strip()
                     results[current_port]['banner'] = banner
-                    self.logger.info(f"Banner bulundu: {banner}")
             
             # Varsayılan port bilgilerini ekle
             for port in ports:
@@ -259,13 +312,9 @@ class ServiceDetector:
                         results[port]['name'] = 'microsoft-ds'
                         results[port]['product'] = 'Microsoft Directory Services'
             
-            # Debug: Son sonuçları göster
-            self.logger.info(f"Sonuçlar: {results}")
-            
             return results
             
         except Exception as e:
-            self.logger.error(f"Nmap taraması sırasında hata: {str(e)}")
             return {}
             
     async def _banner_grab(self, target_ip: str, port: int, protocol: str) -> Optional[str]:
@@ -276,53 +325,84 @@ class ServiceDetector:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(self.timeout)
                     sock.connect((target_ip, port))
-                    banner = sock.recv(1024)
-                    sock.close()
-                    return banner.decode('utf-8', errors='ignore').strip()
+                    
+                    # Port'a göre özel banner grabbing
+                    if port == 22:  # SSH
+                        banner = sock.recv(1024)
+                        return banner.decode('utf-8', errors='ignore').strip()
+                    elif port == 80:  # HTTP
+                        sock.send(b"GET / HTTP/1.1\r\nHost: " + target_ip.encode() + b"\r\n\r\n")
+                        banner = sock.recv(1024)
+                        return banner.decode('utf-8', errors='ignore').strip()
+                    elif port == 443:  # HTTPS
+                        try:
+                            import ssl
+                            context = ssl.create_default_context()
+                            context.check_hostname = False
+                            context.verify_mode = ssl.CERT_NONE
+                            ssl_sock = context.wrap_socket(sock, server_hostname=target_ip)
+                            ssl_sock.send(b"GET / HTTP/1.1\r\nHost: " + target_ip.encode() + b"\r\n\r\n")
+                            banner = ssl_sock.recv(1024)
+                            ssl_sock.close()
+                            return banner.decode('utf-8', errors='ignore').strip()
+                        except:
+                            return "HTTPS Service Detected"
+                    elif port == 21:  # FTP
+                        banner = sock.recv(1024)
+                        return banner.decode('utf-8', errors='ignore').strip()
+                    elif port == 25:  # SMTP
+                        banner = sock.recv(1024)
+                        return banner.decode('utf-8', errors='ignore').strip()
+                    else:
+                        banner = sock.recv(1024)
+                        return banner.decode('utf-8', errors='ignore').strip()
+                        
                 return None
                 
             banner = await asyncio.get_event_loop().run_in_executor(self.executor, grab)
             return banner
             
         except Exception as e:
-            self.logger.warning(f"Banner grabbing hatası: {str(e)}")
             return None
             
     async def detect_services(self, target_ip: str, ports: Dict[int, str], protocol: str = 'tcp') -> Dict[int, Dict]:
-        """
-        Birden fazla port için servis tespiti yapar.
-        
-        Args:
-            target_ip (str): Hedef IP adresi
-            ports (Dict[int, str]): Port numaraları ve durumları
-            protocol (str): Protokol ('tcp' veya 'udp')
-            
-        Returns:
-            Dict[int, Dict]: Port numaralarına göre servis bilgileri
-        """
         services = {}
         open_ports = [port for port, state in ports.items() if state in ['open', 'open|filtered']]
         
-        # Portları gruplara böl
+        if not open_ports:
+            print("\nAçık port bulunamadı!")
+            return services
+            
+        print("\nServis Tespiti Başlatılıyor...")
+        print("-" * 50)
+        
         port_groups = [open_ports[i:i + self.max_workers] for i in range(0, len(open_ports), self.max_workers)]
         
         total_ports = len(open_ports)
         scanned_ports = 0
         
         for group in port_groups:
-            # Her grup için eşzamanlı tespit
             tasks = [self.detect_service(target_ip, port, protocol) for port in group]
             group_results = await asyncio.gather(*tasks)
             
-            # Sonuçları birleştir
             for port, service_info in zip(group, group_results):
                 services[port] = service_info
+                if service_info['name'] != 'unknown':
+                    print(f"\nPort {port}:")
+                    print(f"  Servis: {service_info['name']}")
+                    print(f"  Ürün: {service_info['product']}")
+                    if service_info['version'] != 'unknown':
+                        print(f"  Versiyon: {service_info['version']}")
+                    if service_info['banner']:
+                        print(f"  Banner: {service_info['banner']}")  # Sadece ilk satır
+                    print("-" * 30)
                 
-            # İlerleme durumunu güncelle
             scanned_ports += len(group)
             progress = (scanned_ports / total_ports) * 100
-            self.logger.debug(f"Servis tespiti ilerlemesi: {progress:.1f}% ({scanned_ports}/{total_ports})")
-                
+            print(f"\rServis Tespiti İlerlemesi: {progress:.1f}% ({scanned_ports}/{total_ports})", end="")
+            
+        print("\n" + "-" * 50)
+        print("\nServis Tespiti Tamamlandı!")
         return services
         
     def __del__(self):

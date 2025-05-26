@@ -82,40 +82,42 @@ class PortScanner:
         self.logger.info(f"Port taraması başlatılıyor: {target} ({start_port}-{end_port})")
         
         try:
-            # Port aralığını kontrol et
             if not (1 <= start_port <= 65535 and 1 <= end_port <= 65535):
                 raise ValueError("Port numaraları 1-65535 arasında olmalıdır")
             if start_port > end_port:
                 raise ValueError("Başlangıç portu bitiş portundan büyük olamaz")
                 
-            # Port listesini oluştur
             ports = list(range(start_port, end_port + 1))
-            self.logger.info(f"Taranacak port sayısı: {len(ports)}")
-            
-            # Portları gruplara böl
             port_groups = [ports[i:i + self.max_workers] for i in range(0, len(ports), self.max_workers)]
             
             results = {}
             total_ports = len(ports)
             scanned_ports = 0
             
+            print(f"\nHedef: {target}")
+            print(f"Tarama Tipi: {scan_type.upper()}")
+            print(f"Port Aralığı: {start_port}-{end_port}")
+            print("-" * 50)
+            
             for group in port_groups:
-                # Her grup için eşzamanlı tarama
                 tasks = [self.scan_port(target, port, scan_type) for port in group]
                 group_results = await asyncio.gather(*tasks)
                 
-                # Sonuçları birleştir
                 for port, state in zip(group, group_results):
                     results[port] = state
                     if state == "open":
-                        self.logger.info(f"Port {port} açık")
+                        print(f"Port {port}: AÇIK")
                 
-                # İlerleme durumunu güncelle
                 scanned_ports += len(group)
                 progress = (scanned_ports / total_ports) * 100
-                self.logger.info(f"Tarama ilerlemesi: {progress:.1f}% ({scanned_ports}/{total_ports})")
+                print(f"\rTarama İlerlemesi: {progress:.1f}% ({scanned_ports}/{total_ports})", end="")
             
-            self.logger.info(f"Port taraması tamamlandı. Açık port sayısı: {sum(1 for state in results.values() if state == 'open')}")
+            print("\n" + "-" * 50)
+            open_count = sum(1 for state in results.values() if state == 'open')
+            print(f"\nTarama Tamamlandı!")
+            print(f"Toplam Açık Port: {open_count}")
+            print(f"Toplam Kapalı Port: {len(results) - open_count}")
+            
             return results
             
         except Exception as e:
@@ -159,7 +161,36 @@ class PortScanner:
             return await asyncio.get_event_loop().run_in_executor(self.executor, scan)
             
         except Exception as e:
-            self.logger.warning(f"TCP tarama hatası (Port {port}): {str(e)}")
+            return "filtered"
+            
+    async def _syn_scan(self, target: str, port: int) -> str:
+        """SYN taraması yapar"""
+        try:
+            def scan():
+                # SYN paketi oluştur
+                syn_packet = IP(dst=target)/TCP(dport=port, flags="S")
+                
+                # Paketi gönder ve yanıtı bekle
+                response = sr1(syn_packet, timeout=self.timeout, verbose=False)
+                
+                if response is None:
+                    return "filtered"
+                elif response.haslayer(TCP):
+                    if response[TCP].flags == 0x12:  # SYN-ACK
+                        # RST paketi gönder
+                        rst_packet = IP(dst=target)/TCP(dport=port, flags="R")
+                        send(rst_packet, verbose=False)
+                        return "open"
+                    elif response[TCP].flags == 0x14:  # RST-ACK
+                        return "closed"
+                elif response.haslayer(ICMP):
+                    if int(response[ICMP].type) == 3 and int(response[ICMP].code) in [1,2,9,10,13]:
+                        return "filtered"
+                return "filtered"
+                
+            return await asyncio.get_event_loop().run_in_executor(self.executor, scan)
+            
+        except Exception as e:
             return "filtered"
             
     async def tcp_syn_scan(self, target_ip: str, ports: List[int]) -> Dict[int, str]:
@@ -186,11 +217,10 @@ class PortScanner:
                         rst_packet = IP(dst=target_ip)/TCP(dport=port, flags="R")
                         send(rst_packet, verbose=False)
                         open_ports[port] = "open"
-                        self.logger.info(f"Port {port} açık")
+                        print(f"Port {port} açık")
                 
             except Exception as e:
-                error_msg = f"Port {port} taraması başarısız oldu: {str(e)}"
-                handle_error(self.logger, error_msg)
+                continue
                 
         return open_ports
     

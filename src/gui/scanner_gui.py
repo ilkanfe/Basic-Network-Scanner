@@ -6,104 +6,84 @@ import sys
 import os
 import asyncio
 from typing import Dict
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # Ana dizini Python path'ine ekle
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from src.scanner.port_scanner import PortScanner
 from src.scanner.service_detector import ServiceDetector
-from src.scanner.os_fingerprinter import OSFingerprinter
 from src.visualization.report_generator import ReportGenerator
 
 class NetworkScannerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Basic Network Scanner")
-        self.root.geometry("1000x800")
+        self.root.geometry("600x800")  # Pencere boyutunu dikey olarak uzattım
         
         # Ana frame
         self.main_frame = ttk.Frame(root, padding="10")
         self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Sol panel (Kontroller)
+        # Üst panel (Kontroller)
         self.control_frame = ttk.LabelFrame(self.main_frame, text="Tarama Kontrolleri", padding="5")
-        self.control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
+        self.control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
         
+        # Kontroller için grid yapısı
         # Hedef IP girişi
-        ttk.Label(self.control_frame, text="Hedef IP:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(self.control_frame, text="Hedef IP:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.target_ip = ttk.Entry(self.control_frame, width=30)
-        self.target_ip.grid(row=0, column=1, sticky=tk.W)
+        self.target_ip.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         self.target_ip.insert(0, "192.168.1.1")
         
         # Port aralığı
-        ttk.Label(self.control_frame, text="Port Aralığı:").grid(row=1, column=0, sticky=tk.W)
+        ttk.Label(self.control_frame, text="Port Aralığı:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.port_range = ttk.Entry(self.control_frame, width=30)
-        self.port_range.grid(row=1, column=1, sticky=tk.W)
+        self.port_range.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         self.port_range.insert(0, "1-1024")
         
         # Tarama tipi
-        ttk.Label(self.control_frame, text="Tarama Tipi:").grid(row=2, column=0, sticky=tk.W)
+        ttk.Label(self.control_frame, text="Tarama Tipi:").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.scan_type = ttk.Combobox(self.control_frame, values=["SYN", "TCP"], width=27)
-        self.scan_type.grid(row=2, column=1, sticky=tk.W)
+        self.scan_type.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
         self.scan_type.set("SYN")
         
         # Servis tespiti
         self.service_detect = tk.BooleanVar(value=True)
-        ttk.Checkbutton(self.control_frame, text="Servis Tespiti", variable=self.service_detect).grid(row=3, column=0, columnspan=2, sticky=tk.W)
-        
-        # OS Fingerprinting
-        self.os_detect = tk.BooleanVar(value=True)
-        ttk.Checkbutton(self.control_frame, text="OS Fingerprinting", variable=self.os_detect).grid(row=4, column=0, columnspan=2, sticky=tk.W)
+        ttk.Checkbutton(self.control_frame, text="Servis Tespiti", variable=self.service_detect).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=2)
         
         # Tarama butonu
         self.scan_button = ttk.Button(self.control_frame, text="Taramayı Başlat", command=self.start_scan)
-        self.scan_button.grid(row=5, column=0, columnspan=2, pady=10)
+        self.scan_button.grid(row=4, column=0, columnspan=2, pady=10)
         
         # İlerleme çubuğu
-        self.progress = ttk.Progressbar(self.control_frame, length=300, mode='indeterminate')
-        self.progress.grid(row=6, column=0, columnspan=2, pady=5)
+        self.progress = ttk.Progressbar(self.main_frame, length=580, mode='indeterminate')
+        self.progress.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
         
-        # Sağ panel (Sonuçlar)
+        # Alt panel (Sonuçlar)
         self.result_frame = ttk.LabelFrame(self.main_frame, text="Tarama Sonuçları", padding="5")
-        self.result_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
+        self.result_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
         
-        # Sonuç notebook (tab'lar)
-        self.result_notebook = ttk.Notebook(self.result_frame)
-        self.result_notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Port ve servis sonuçları tab'ı
-        self.port_tab = ttk.Frame(self.result_notebook)
-        self.result_notebook.add(self.port_tab, text="Portlar ve Servisler")
-        
-        # OS sonuçları tab'ı
-        self.os_tab = ttk.Frame(self.result_notebook)
-        self.result_notebook.add(self.os_tab, text="OS Fingerprinting")
-        
-        # Port sonuçları
-        self.port_text = scrolledtext.ScrolledText(self.port_tab, width=70, height=20)
+        # Port ve servis sonuçları
+        self.port_text = scrolledtext.ScrolledText(self.result_frame, width=70, height=30)
         self.port_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        
-        # OS sonuçları
-        self.os_text = scrolledtext.ScrolledText(self.os_tab, width=70, height=10)
-        self.os_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        
-        # OS grafik alanı
-        self.os_graph_frame = ttk.Frame(self.os_tab)
-        self.os_graph_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
         
         # Rapor oluştur butonu
         self.report_button = ttk.Button(self.main_frame, text="Rapor Oluştur", command=self.generate_report, state='disabled')
-        self.report_button.grid(row=1, column=0, columnspan=2, pady=5)
+        self.report_button.grid(row=3, column=0, pady=5)
         
         # Tarama sonuçları
         self.scan_results = None
         
+        # Grid ağırlıklarını ayarla
+        self.main_frame.columnconfigure(0, weight=1)
+        self.main_frame.rowconfigure(2, weight=1)
+        self.result_frame.columnconfigure(0, weight=1)
+        self.result_frame.rowconfigure(0, weight=1)
+        
     def start_scan(self):
         # Arayüzü devre dışı bırak
         self.scan_button.state(['disabled'])
-        self.result_text.delete(1.0, tk.END)
+        self.port_text.delete(1.0, tk.END)
         self.progress.start()
         
         # Taramayı ayrı bir thread'de başlat
@@ -168,14 +148,8 @@ class NetworkScannerGUI:
                 service_detector = ServiceDetector()
                 services = await service_detector.detect_services(target, open_ports)
             
-            # OS Fingerprinting yap
-            os_info = {}
-            if self.os_detect.get():
-                os_fingerprinter = OSFingerprinter()
-                os_info = await os_fingerprinter.detect_os(target)
-            
             # Sonuçları göster
-            self.show_results(open_ports, services, os_info)
+            self.show_results(open_ports, services)
             
         except Exception as e:
             self.logger.error(f"Tarama hatası: {str(e)}")
@@ -185,7 +159,7 @@ class NetworkScannerGUI:
             self.scan_button.config(state='normal')
             self.progress.stop()
             
-    def show_results(self, ports: Dict[int, str], services: Dict[int, Dict], os_info: Dict):
+    def show_results(self, ports: Dict[int, str], services: Dict[int, Dict]):
         """Tarama sonuçlarını gösterir"""
         # Port ve servis sonuçlarını göster
         port_text = "Açık Portlar:\n"
@@ -214,48 +188,6 @@ class NetworkScannerGUI:
         
         self.port_text.delete(1.0, tk.END)
         self.port_text.insert(tk.END, port_text)
-        
-        # OS sonuçlarını göster
-        if os_info:
-            os_text = "İşletim Sistemi Tespiti:\n\n"
-            os_text += f"OS Adı: {os_info.get('name', 'Bilinmiyor')}\n"
-            os_text += f"Güven Skoru: {os_info.get('confidence', 0):.2f}\n\n"
-            
-            os_text += "TTL Analizi:\n"
-            ttl_info = os_info.get('ttl_analysis', {})
-            os_text += f"  OS: {ttl_info.get('os', 'Bilinmiyor')}\n"
-            os_text += f"  TTL: {ttl_info.get('ttl', 'Bilinmiyor')}\n\n"
-            
-            os_text += "TCP Stack Analizi:\n"
-            stack_info = os_info.get('stack_analysis', {})
-            os_text += f"  Davranış: {stack_info.get('behavior', 'Bilinmiyor')}\n"
-            os_text += f"  Detaylar: {stack_info.get('details', 'Bilinmiyor')}\n"
-            
-            self.os_text.delete(1.0, tk.END)
-            self.os_text.insert(tk.END, os_text)
-            
-            # OS grafiğini göster
-            self.show_os_graph(os_info)
-    
-    def show_os_graph(self, os_info: Dict):
-        """OS tespit sonuçlarını grafik olarak gösterir"""
-        # Mevcut grafiği temizle
-        for widget in self.os_graph_frame.winfo_children():
-            widget.destroy()
-            
-        # Yeni grafik oluştur
-        fig, ax = plt.subplots(figsize=(6, 4))
-        
-        # Güven skorunu göster
-        confidence = os_info.get('confidence', 0)
-        ax.bar(['Güven Skoru'], [confidence], color='green' if confidence > 0.7 else 'orange' if confidence > 0.3 else 'red')
-        ax.set_ylim(0, 1)
-        ax.set_title('OS Tespit Güven Skoru')
-        
-        # Grafiği Tkinter'a ekle
-        canvas = FigureCanvasTkAgg(fig, master=self.os_graph_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
     
     def finish_scan(self):
         self.progress.stop()

@@ -28,13 +28,9 @@ class MainWindow(QMainWindow):
         
         # Tarama tipi seçimi
         self.scan_type = QComboBox()
-        self.scan_type.addItems(["TCP", "SYN"])
+        self.scan_type.addItems(["TCP", "UDP"])
         layout.addWidget(QLabel("Tarama Tipi:"))
         layout.addWidget(self.scan_type)
-        
-        # Servis tespiti seçeneği
-        self.service_detection = QCheckBox("Servis Tespiti")
-        layout.addWidget(self.service_detection)
         
         # Tarama başlat butonu
         self.scan_button = QPushButton("Taramayı Başlat")
@@ -55,7 +51,6 @@ class MainWindow(QMainWindow):
         target = self.target_input.text()
         port_range = self.port_input.text()
         scan_type = self.scan_type.currentText()
-        service_detection = self.service_detection.isChecked()
         
         # Port aralığını parse et
         if "-" in port_range:
@@ -65,7 +60,7 @@ class MainWindow(QMainWindow):
             ports = [int(p) for p in port_range.split(",")]
         
         # Taramayı başlat
-        results = self.scanner.scan(target, ports, scan_type, service_detection)
+        results = self.scanner.scan(target, ports, scan_type)
         
         # Sonuçları göster
         self.results_text.clear()
@@ -75,15 +70,6 @@ class MainWindow(QMainWindow):
             self.results_text.append("Açık Portlar:")
             for port in results['open_ports']:
                 self.results_text.append(f"Port {port['port']}: open")
-        
-        # Servisleri göster
-        if results['open_ports']:
-            self.results_text.append("\nTespit Edilen Servisler:")
-            for port in results['open_ports']:
-                if port['service']:
-                    self.results_text.append(f"Port {port['port']}: {port['service']}")
-                    if 'banner' in port['service']:
-                        self.results_text.append(f"  Banner: {port['service']['banner']}")
         
         # MAC adreslerini göster
         self.results_text.append("\nAğdaki Cihazlar (MAC Adresleri):")

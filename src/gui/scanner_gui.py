@@ -42,10 +42,11 @@ class NetworkScannerGUI:
         self.port_range.insert(0, "1-1024")
         
         # Tarama tipi
-        ttk.Label(self.control_frame, text="Tarama Tipi:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.scan_type = ttk.Combobox(self.control_frame, values=["SYN", "TCP"], width=27)
-        self.scan_type.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
-        self.scan_type.set("SYN")
+        self.scan_type_label = ttk.Label(self.control_frame, text="Tarama Tipi:")
+        self.scan_type_label.grid(row=2, column=0, padx=5, pady=5, sticky="w")
+        self.scan_type = ttk.Combobox(self.control_frame, values=["TCP", "UDP"], width=27)
+        self.scan_type.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        self.scan_type.set("TCP")
         
         # Servis tespiti
         self.service_detect = tk.BooleanVar(value=True)
@@ -162,32 +163,57 @@ class NetworkScannerGUI:
     def show_results(self, ports: Dict[int, str], services: Dict[int, Dict]):
         """Tarama sonuçlarını gösterir"""
         # Port ve servis sonuçlarını göster
-        port_text = "Açık Portlar:\n"
-        for port, state in ports.items():
-            port_text += f"Port {port}: {state}\n"
-            
-        if services:
-            port_text += "\nTespit Edilen Servisler:\n"
-            for port, service_info in services.items():
-                service_name = service_info.get('name', 'unknown')
-                product = service_info.get('product', '')
-                version = service_info.get('version', '')
-                
-                if service_name != 'unknown':
-                    if product and version and version != 'unknown':
-                        port_text += f"Port {port}: {service_name} ({product} {version})\n"
-                    elif product:
-                        port_text += f"Port {port}: {service_name} ({product})\n"
-                    else:
-                        port_text += f"Port {port}: {service_name}\n"
-                else:
-                    port_text += f"Port {port}: Bilinmeyen servis\n"
-                    
-                if service_info.get('banner'):
-                    port_text += f"  Banner: {service_info['banner']}\n"
-        
         self.port_text.delete(1.0, tk.END)
-        self.port_text.insert(tk.END, port_text)
+        
+        open_ports = {port: state for port, state in ports.items() if state == "open"}
+        closed_ports = {port: state for port, state in ports.items() if state == "closed"}
+        filtered_ports = {port: state for port, state in ports.items() if state not in ["open", "closed"]}
+        
+        result_text = ""
+        
+        if open_ports:
+            result_text += "Açık Portlar:\n"
+            for port, state in open_ports.items():
+                result_text += f"Port {port}: {state}\n"
+            
+            if services:
+                result_text += "\nTespit Edilen Servisler:\n"
+                for port, service_info in services.items():
+                    service_name = service_info.get('name', 'unknown')
+                    product = service_info.get('product', '')
+                    version = service_info.get('version', '')
+                    
+                    if service_name != 'unknown':
+                        if product and version and version != 'unknown':
+                            result_text += f"Port {port}: {service_name} ({product} {version})\n"
+                        elif product:
+                            result_text += f"Port {port}: {service_name} ({product})\n"
+                        else:
+                            result_text += f"Port {port}: {service_name}\n"
+                    else:
+                        result_text += f"Port {port}: Bilinmeyen servis\n"
+                        
+                    if service_info.get('banner'):
+                        result_text += f"  Banner: {service_info['banner']}\n"
+        else:
+            result_text += "Açık port bulunamadı.\n"
+            
+        # Kapalı ve filtrelenmiş portları da ekleyelim
+        if closed_ports:
+             result_text += f"\nKapalı Port Sayısı: {len(closed_ports)}\n"
+             # İsteğe bağlı olarak kapalı portları listeleyebiliriz, şimdilik sadece sayı.
+             # result_text += "Kapalı Portlar:\n"
+             # for port in closed_ports.keys():
+             #     result_text += f"{port}\n"
+                
+        if filtered_ports:
+             result_text += f"\nFiltrelenmiş Port Sayısı: {len(filtered_ports)}\n"
+             # İsteğe bağlı olarak filtrelenmiş portları listeleyebiliriz, şimdilik sadece sayı.
+             # result_text += "Filtrelenmiş Portlar:\n"
+             # for port in filtered_ports.keys():
+             #     result_text += f"{port}\n"
+        
+        self.port_text.insert(tk.END, result_text)
     
     def finish_scan(self):
         self.progress.stop()

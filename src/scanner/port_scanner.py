@@ -66,7 +66,7 @@ class PortScanner:
             handle_error(self.logger, error_msg)
             raise ValueError(f"IP aralığı taraması başarısız oldu: {str(e)}")
     
-    async def scan_ports(self, target: str, start_port: int, end_port: int, scan_type: str = "syn") -> Dict[int, str]:
+    async def scan_ports(self, target: str, start_port: int, end_port: int, scan_type: str = "tcp") -> Dict[int, str]:
         """
         Belirtilen port aralığını tarar.
         
@@ -74,7 +74,7 @@ class PortScanner:
             target (str): Hedef IP adresi
             start_port (int): Başlangıç portu
             end_port (int): Bitiş portu
-            scan_type (str): Tarama tipi ("syn" veya "tcp")
+            scan_type (str): Tarama tipi ("tcp" veya "udp")
             
         Returns:
             Dict[int, str]: Port numaraları ve durumları
@@ -124,23 +124,23 @@ class PortScanner:
             self.logger.error(f"Port taraması sırasında hata: {str(e)}")
             raise
             
-    async def scan_port(self, target: str, port: int, scan_type: str = "syn") -> str:
+    async def scan_port(self, target: str, port: int, scan_type: str = "tcp") -> str:
         """
         Tek bir portu tarar.
         
         Args:
             target (str): Hedef IP adresi
             port (int): Port numarası
-            scan_type (str): Tarama tipi ("syn" veya "tcp")
+            scan_type (str): Tarama tipi ("tcp" veya "udp")
             
         Returns:
             str: Port durumu ("open", "closed", "filtered")
         """
         try:
-            if scan_type == "syn":
-                return await self._syn_scan(target, port)
-            elif scan_type == "tcp":
+            if scan_type == "tcp":
                 return await self._tcp_connect_scan(target, port)
+            elif scan_type == "udp":
+                return await self._udp_scan(target, port)
             else:
                 raise ValueError(f"Geçersiz tarama tipi: {scan_type}")
                 
@@ -163,34 +163,41 @@ class PortScanner:
         except Exception as e:
             return "filtered"
             
-    async def _syn_scan(self, target: str, port: int) -> str:
-        """SYN taraması yapar"""
+    async def _udp_scan(self, target: str, port: int) -> str:
+        """UDP taraması yapar"""
         try:
-            def scan():
-                # SYN paketi oluştur
-                syn_packet = IP(dst=target)/TCP(dport=port, flags="S")
+            def grab():
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(self.timeout)
                 
-                # Paketi gönder ve yanıtı bekle
-                response = sr1(syn_packet, timeout=self.timeout, verbose=False)
-                
-                if response is None:
-                    return "filtered"
-                elif response.haslayer(TCP):
-                    if response[TCP].flags == 0x12:  # SYN-ACK
-                        # RST paketi gönder
-                        rst_packet = IP(dst=target)/TCP(dport=port, flags="R")
-                        send(rst_packet, verbose=False)
+                try:
+                    if port == 53:
+                        # DNS sorgusu gönder (örneğin, example.com için A kaydı)
+                        dns_query = b'\xaa\xaa\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01'
+                        sock.sendto(dns_query, (target, port))
+                        data, _ = sock.recvfrom(1024) # Yanıt bekle
+                        return "open" # Yanıt geldiyse açık kabul et
+                    else:
+                        # Diğer UDP portları için boş veri gönder
+                        sock.sendto(b"", (target, port))
+                        data, _ = sock.recvfrom(1024)
                         return "open"
-                    elif response[TCP].flags == 0x14:  # RST-ACK
-                        return "closed"
-                elif response.haslayer(ICMP):
-                    if int(response[ICMP].type) == 3 and int(response[ICMP].code) in [1,2,9,10,13]:
-                        return "filtered"
-                return "filtered"
-                
-            return await asyncio.get_event_loop().run_in_executor(self.executor, scan)
+                except socket.timeout:
+                    # Zaman aşımı, port açık veya filtrelenmiş olabilir
+                    return "open|filtered"
+                except socket.error as e:
+                    # Socket hatası, genellikle port kapalıdır (ICMP hatası)
+                    # Belirli ICMP hatalarını kontrol edebiliriz, ama şimdilik genel hata kapalı kabul edilebilir.
+                    # Ya da sadece hata durumunda filtered dönelim, GUI bunu daha iyi yorumlar.
+                    # Örneğin, Windows'ta Port Unreachable hatası socket.error olarak gelebilir.
+                    return "closed" # Hata durumunda kapalı kabul edelim
+                finally:
+                    sock.close()
+                    
+            return await asyncio.get_event_loop().run_in_executor(None, grab)
             
         except Exception as e:
+            self.logger.error(f"UDP port {port} taraması sırasında hata: {str(e)}")
             return "filtered"
             
     async def tcp_syn_scan(self, target_ip: str, ports: List[int]) -> Dict[int, str]:
@@ -367,7 +374,7 @@ class PortScanner:
                 
         return open_ports
 
-    async def scan_target(self, target_ip: str, ports: List[int], scan_type: str = "syn") -> Dict:
+    async def scan_target(self, target_ip: str, ports: List[int], scan_type: str = "tcp") -> Dict:
         """
         Hedef IP'yi belirtilen portlarda tarar.
         
@@ -411,3 +418,68 @@ class PortScanner:
     def __del__(self):
         """ThreadPoolExecutor'ı temizle."""
         self.executor.shutdown(wait=False)
+
+    def scan(self, target, ports, scan_type="TCP", service_detection=False):
+        """
+        Belirtilen hedef ve portlarda tarama yapar
+        """
+        results = {
+            'target': target,
+            'scan_type': scan_type,
+            'open_ports': []
+        }
+        
+        total_ports = len(ports)
+        scanned_count = 0
+        
+        for port in ports:
+            try:
+                if scan_type == "TCP":
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(1)
+                    result = sock.connect_ex((target, port))
+                    if result == 0:
+                        service_info = self._get_service_info(target, port, "tcp") if service_detection else None
+                        results['open_ports'].append({
+                            'port': port,
+                            'service': service_info
+                        })
+                        print(f"Port {port}: AÇIK (TCP)")
+                    sock.close()
+                
+                elif scan_type == "UDP":
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    sock.settimeout(1)
+                    try:
+                        # UDP portuna boş veri gönder
+                        sock.sendto(b"", (target, port))
+                        # Yanıt bekle
+                        data, addr = sock.recvfrom(1024)
+                        service_info = self._get_service_info(target, port, "udp") if service_detection else None
+                        results['open_ports'].append({
+                            'port': port,
+                            'service': service_info
+                        })
+                        print(f"Port {port}: AÇIK (UDP)")
+                    except socket.error:
+                        # UDP portu açık olabilir ama yanıt vermiyor olabilir
+                        service_info = self._get_service_info(target, port, "udp") if service_detection else None
+                        if service_info:
+                            results['open_ports'].append({
+                                'port': port,
+                                'service': service_info
+                            })
+                            print(f"Port {port}: Açık veya Filtrelenmiş (UDP)")
+                    finally:
+                        sock.close()
+            
+            except Exception as e:
+                print(f"Port {port} taranırken hata: {str(e)}")
+                continue
+            
+            scanned_count += 1
+            progress = (scanned_count / total_ports) * 100
+            print(f"\rTarama İlerlemesi: {progress:.1f}% ({scanned_count}/{total_ports})", end="")
+        
+        print("\nTarama tamamlandı.")
+        return results

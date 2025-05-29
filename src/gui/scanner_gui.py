@@ -14,11 +14,11 @@ from src.scanner.port_scanner import PortScanner
 from src.scanner.service_detector import ServiceDetector
 from src.visualization.report_generator import ReportGenerator
 
-class NetworkScannerGUI:
+class NetworkScannerGUI:    
     def __init__(self, root):
         self.root = root
         self.root.title("Basic Network Scanner")
-        self.root.geometry("600x800")  # Pencere boyutunu dikey olarak uzattım
+        self.root.geometry("700x600")  # Pencere boyutunu biraz daha büyüttüm
         
         # Ana frame
         self.main_frame = ttk.Frame(root, padding="10")
@@ -65,8 +65,8 @@ class NetworkScannerGUI:
         self.result_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
         
         # Port ve servis sonuçları
-        self.port_text = scrolledtext.ScrolledText(self.result_frame, width=70, height=30)
-        self.port_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
+        self.port_text = scrolledtext.ScrolledText(self.result_frame, width=70, height=12)
+        self.port_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=10)
         
         # Rapor oluştur butonu
         self.report_button = ttk.Button(self.main_frame, text="Rapor Oluştur", command=self.generate_report, state='disabled')

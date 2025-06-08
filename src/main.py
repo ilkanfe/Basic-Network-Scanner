@@ -6,7 +6,6 @@ from scanner.os_fingerprint import OSFingerprinter
 from visualization.report_generator import ReportGenerator
 
 def setup_logging():
-    """Loglama ayarlarını yapılandırır."""
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -17,8 +16,6 @@ def setup_logging():
     )
 
 def main():
-    """Ana uygulama fonksiyonu."""
-    # Komut satırı argümanlarını ayarla
     parser = argparse.ArgumentParser(description='Ağ Tarama Aracı')
     parser.add_argument('target', help='Hedef IP adresi veya IP aralığı (CIDR formatında)')
     parser.add_argument('--tcp-ports', help='Taranacak TCP portları (örn: 80,443,8080)')
@@ -28,21 +25,20 @@ def main():
     
     args = parser.parse_args()
     
-    # Loglama ayarlarını yapılandır
     setup_logging()
     logger = logging.getLogger(__name__)
     
     try:
-        # Port tarayıcıyı başlat
+        # Port tarayıcıyı başlatır
         port_scanner = PortScanner()
         
-        # Hedef IP'yi veya IP aralığını tara
+        # Hedef IP'yi veya IP aralığını tarar
         if '/' in args.target:  # CIDR formatında IP aralığı
             logger.info(f"IP aralığı taranıyor: {args.target}")
             active_hosts = port_scanner.scan_ip_range(args.target)
             logger.info(f"Aktif hostlar: {active_hosts}")
             
-            # Her aktif host için tarama yap
+            # Her aktif host için tarama yapaıyor burası
             for host in active_hosts:
                 scan_host(host, args, logger)
         else:  # Tek IP
@@ -85,14 +81,14 @@ def scan_host(host: str, args: argparse.Namespace, logger: logging.Logger):
             udp_services = service_detector.detect_services(host, scan_results['udp_ports'], 'udp')
             services.update(udp_services)
         
-        # İşletim sistemi tespiti
+        # İşletim sistemi tespiti Bunu şimdilik devre dışı bırakıyorum.
         os_results = {}
         if not args.no_os_detection:
             logger.info("İşletim sistemi tespiti yapılıyor...")
             os_fingerprinter = OSFingerprinter()
             os_results = os_fingerprinter.fingerprint_os(host)
         
-        # Rapor oluştur
+        # Rapor oluştur Bunu da şimdilik devre dışı bırakıyorum.
         logger.info("Rapor oluşturuluyor...")
         report_generator = ReportGenerator()
         report_path = report_generator.generate_report(scan_results, services, os_results)

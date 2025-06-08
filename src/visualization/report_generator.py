@@ -25,12 +25,15 @@ class ReportGenerator:
             str: Oluşturulan grafik dosyasının yolu
         """
         # TCP ve UDP portları için veri hazırla
-        tcp_ports = list(scan_results['tcp_ports'].keys())
-        udp_ports = list(scan_results['udp_ports'].keys())
+        tcp_ports_data = scan_results.get('tcp_ports', {})
+        udp_ports_data = scan_results.get('udp_ports', {})
+
+        tcp_ports = list(tcp_ports_data.keys())
+        udp_ports = list(udp_ports_data.keys())
         
         # Port durumlarını renk kodlarına dönüştür
-        tcp_colors = ['green' if scan_results['tcp_ports'][p] == 'open' else 'red' for p in tcp_ports]
-        udp_colors = ['green' if scan_results['udp_ports'][p] == 'open' else 'red' for p in udp_ports]
+        tcp_colors = ['green' if tcp_ports_data.get(p) == 'open' else 'red' for p in tcp_ports]
+        udp_colors = ['green' if udp_ports_data.get(p) == 'open' else 'red' for p in udp_ports]
         
         # Plotly ile ısı haritası oluştur
         fig = make_subplots(rows=2, cols=1, subplot_titles=('TCP Ports', 'UDP Ports'))
@@ -132,9 +135,9 @@ class ReportGenerator:
         # Yöntemlere göre sonuçları hazırla
         methods = ['TTL Analizi', 'TCP Stack', 'Nmap']
         results = [
-            os_results['ttl_analysis'],
-            os_results['tcp_stack'].get('window_size', 'Bilinmiyor'),
-            os_results['nmap_detection']
+            os_results['ttl_analysis'].get('os', 'Bilinmiyor'),
+            os_results['stack_analysis'].get('behavior', 'Bilinmiyor'),
+            os_results['nmap_detection'].get('name', 'Bilinmiyor') if os_results.get('nmap_detection') else 'Bilinmiyor'
         ]
         
         # Plotly ile çubuk grafik oluştur
@@ -184,9 +187,9 @@ class ReportGenerator:
         summary = f"""
         <div class="section">
             <h2>Özet</h2>
-            <p>Bu rapor, {scan_results['ip']} adresine yapılan tarama sonuçlarını içermektedir.</p>
-            <p>Toplam {len(scan_results['tcp_ports'])} TCP portu ve {len(scan_results['udp_ports'])} UDP portu taranmıştır.</p>
-            <p>İşletim sistemi tespiti: {os_results['final_guess']}</p>
+            <p>Bu rapor, {scan_results.get('target', 'Bilinmiyor')} adresine yapılan tarama sonuçlarını içermektedir.</p>
+            <p>Toplam {len(scan_results.get('tcp_ports', {}))} TCP portu ve {len(scan_results.get('udp_ports', {}))} UDP portu taranmıştır.</p>
+            <p>İşletim sistemi tespiti: {os_results.get('name', 'Bilinmiyor')}</p>
         </div>
         """
         
@@ -197,11 +200,11 @@ class ReportGenerator:
             <ul>
         """
         
-        for port, state in scan_results['tcp_ports'].items():
+        for port, state in scan_results.get('tcp_ports', {}).items():
             if state == 'open':
                 security_recommendations += f"<li>Port {port} açık. Güvenlik duvarı kurallarını gözden geçirin.</li>"
         
-        for port, state in scan_results['udp_ports'].items():
+        for port, state in scan_results.get('udp_ports', {}).items():
             if state == 'open':
                 security_recommendations += f"<li>Port {port} açık. Güvenlik duvarı kurallarını gözden geçirin.</li>"
         

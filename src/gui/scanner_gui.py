@@ -5,7 +5,8 @@ from datetime import datetime
 import sys
 import os
 import asyncio
-from typing import Dict
+from typing import Dict, List, Optional
+import json
 
 # Ana dizini Python path'ine ekle
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -15,103 +16,121 @@ from src.scanner.service_detector import ServiceDetector
 from src.visualization.report_generator import ReportGenerator
 from src.utils.network_utils import get_mac_and_vendor
 from src.scanner.os_fingerprinter import OSFingerprinter
+from src.scanner.network_discovery import NetworkDiscovery
 
 class NetworkScannerGUI:    
     def __init__(self, root):
         self.root = root
-        self.root.title("Basic Network Scanner")
-        self.root.geometry("800x700")  # Pencere boyutunu büyüttüm
+        self.root.title("Ağ Tarayıcı")
+        self.root.geometry("800x600")
         
-        # Ana frame
-        self.main_frame = ttk.Frame(root, padding="10")
+        # Ana frame'i oluştur
+        self.main_frame = ttk.Frame(self.root, padding="10")
         self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
+        # GUI bileşenlerini oluştur
+        self.create_widgets()
+        
+        # Tarayıcı nesnelerini oluştur
+        self.port_scanner = PortScanner()
+        self.service_detector = ServiceDetector()
+        self.os_fingerprinter = OSFingerprinter()
+        self.network_discovery = NetworkDiscovery()
+        
+        # Rapor oluşturucuyu başlat
+        self.report_generator = ReportGenerator()
+        
+        # Pencere boyutlandırma ayarları
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        self.main_frame.columnconfigure(1, weight=1)
+        
+    def create_widgets(self):
+        """GUI bileşenlerini oluşturur"""
         # Üst panel (Kontroller)
-        self.control_frame = ttk.LabelFrame(self.main_frame, text="Tarama Kontrolleri", padding="5")
-        self.control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
+        self.control_frame = ttk.LabelFrame(self.main_frame, text="Tarama Kontrolleri", padding="10")
+        self.control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N), padx=5, pady=5)
         
-        # Kontroller için grid yapısı
-        # Hedef IP girişi
-        ttk.Label(self.control_frame, text="Hedef IP:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        # IP adresi girişi
+        ttk.Label(self.control_frame, text="Hedef IP:").grid(row=0, column=0, sticky=tk.W)
         self.target_ip = ttk.Entry(self.control_frame, width=30)
-        self.target_ip.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        self.target_ip.insert(0, "192.168.1.1")
+        self.target_ip.grid(row=0, column=1, sticky=tk.W, padx=5)
+        self.target_ip.insert(0, "192.168.1.1")  # Varsayılan IP
         
-        # Port aralığı
-        ttk.Label(self.control_frame, text="Port Aralığı:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        # Port aralığı girişi
+        ttk.Label(self.control_frame, text="Port Aralığı:").grid(row=1, column=0, sticky=tk.W)
         self.port_range = ttk.Entry(self.control_frame, width=30)
-        self.port_range.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
-        self.port_range.insert(0, "1-1024")
+        self.port_range.grid(row=1, column=1, sticky=tk.W, padx=5)
+        self.port_range.insert(0, "1-1024")  # Varsayılan port aralığı
         
-        # Tarama tipi
-        self.scan_type_label = ttk.Label(self.control_frame, text="Tarama Tipi:")
-        self.scan_type_label.grid(row=2, column=0, padx=5, pady=5, sticky="w")
-        self.scan_type = ttk.Combobox(self.control_frame, values=["TCP", "UDP"], width=27)
-        self.scan_type.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
-        self.scan_type.set("TCP")
+        # Tarama tipi seçimi
+        ttk.Label(self.control_frame, text="Tarama Tipi:").grid(row=2, column=0, sticky=tk.W)
+        self.scan_type = ttk.Combobox(self.control_frame, values=["TCP", "UDP", "SYN"], width=27)
+        self.scan_type.grid(row=2, column=1, sticky=tk.W, padx=5)
+        self.scan_type.set("TCP")  # Varsayılan tarama tipi
         
-        # Servis tespiti
+        # Servis tespiti seçeneği
         self.service_detect = tk.BooleanVar(value=True)
-        ttk.Checkbutton(self.control_frame, text="Servis Tespiti", variable=self.service_detect).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=2)
+        ttk.Checkbutton(self.control_frame, text="Servis Tespiti", variable=self.service_detect).grid(row=3, column=0, columnspan=2, sticky=tk.W)
         
-        # Tarama butonu
+        # Tarama başlat butonu
         self.scan_button = ttk.Button(self.control_frame, text="Taramayı Başlat", command=self.start_scan)
-        self.scan_button.grid(row=4, column=0, columnspan=2, pady=10)
+        self.scan_button.grid(row=5, column=0, columnspan=2, pady=10)
         
-        # İlerleme çubuğu
-        self.progress = ttk.Progressbar(self.main_frame, length=780, mode='indeterminate')
-        self.progress.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
-        
-        # Alt panel (Sonuçlar)
-        self.result_frame = ttk.LabelFrame(self.main_frame, text="Tarama Sonuçları", padding="5")
-        self.result_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
+        # Ağ keşfi butonu
+        self.discover_button = ttk.Button(self.control_frame, text="Ağdaki Cihazları Keşfet", command=self.start_discovery)
+        self.discover_button.grid(row=6, column=0, columnspan=2, pady=5)
         
         # Port ve servis sonuçları
-        self.port_text = scrolledtext.ScrolledText(self.result_frame, width=90, height=15)
-        self.port_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=10)
+        self.port_text = scrolledtext.ScrolledText(self.main_frame, width=90, height=15)
+        self.port_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=10, columnspan=2)
         
         # Rapor oluştur butonu
         self.report_button = ttk.Button(self.main_frame, text="Rapor Oluştur", command=self.generate_report, state='disabled')
-        self.report_button.grid(row=3, column=0, pady=5)
+        self.report_button.grid(row=2, column=0, pady=5, columnspan=2)
+        
+        # Durum çubuğunu oluştur
+        self.status_var = tk.StringVar()
+        self.status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        
+        # İlerleme çubuğunu oluştur
+        self.progress = ttk.Progressbar(self.root, length=300, mode='determinate')
+        self.progress.grid(row=2, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
         
         # Tarama sonuçları
         self.scan_results = None
         
-        # Grid ağırlıklarını ayarla
-        self.main_frame.columnconfigure(0, weight=1)
-        self.main_frame.rowconfigure(2, weight=1)
-        self.result_frame.columnconfigure(0, weight=1)
-        self.result_frame.rowconfigure(0, weight=1)
+    def update_status(self, message: str):
+        """Durum çubuğunu günceller"""
+        self.status_var.set(message)
+        self.root.update_idletasks()
         
-        self.os_fingerprinter = OSFingerprinter()
+    def show_error(self, title: str, message: str):
+        """Hata mesajını gösterir"""
+        messagebox.showerror(title, message)
+        self.update_status(f"Hata: {message}")
+        
+    def show_info(self, title: str, message: str):
+        """Bilgi mesajını gösterir"""
+        messagebox.showinfo(title, message)
+        self.update_status(message)
         
     def start_scan(self):
-        # Arayüzü devre dışı bırak
-        self.scan_button.state(['disabled'])
-        self.port_text.delete(1.0, tk.END)
-        self.progress.start()
-        
-        # Taramayı ayrı bir thread'de başlat
-        thread = threading.Thread(target=self.run_scan)
-        thread.daemon = True
-        thread.start()
-    
-    def run_scan(self):
         """Tarama işlemini başlatır"""
         try:
-            # Giriş değerlerini al
+            # Giriş değerlerini al ve doğrula
             target = self.target_ip.get().strip()
             port_range = self.port_range.get().strip()
             scan_type = self.scan_type.get().lower()
             detect_services = self.service_detect.get()
             
-            # Değerleri doğrula
             if not target:
-                messagebox.showerror("Hata", "Hedef IP adresi gerekli")
+                self.show_error("Hata", "Hedef IP adresi gerekli")
                 return
                 
             if not port_range:
-                messagebox.showerror("Hata", "Port aralığı gerekli")
+                self.show_error("Hata", "Port aralığı gerekli")
                 return
                 
             # Port aralığını parse et
@@ -121,116 +140,153 @@ class NetworkScannerGUI:
                 else:
                     start_port = end_port = int(port_range)
             except ValueError:
-                messagebox.showerror("Hata", "Geçersiz port aralığı formatı")
+                self.show_error("Hata", "Geçersiz port aralığı formatı")
                 return
                 
-            # Tarama işlemini başlat
-            self.scan_button.config(state='disabled')
-            self.progress.start()
+            # Arayüzü devre dışı bırak
+            self.scan_button.state(['!disabled'])
+            self.port_text.delete(1.0, tk.END)
+            self.progress['value'] = 0
+            self.update_status("Tarama başlatılıyor...")
             
+            # Taramayı ayrı bir thread'de başlat
+            thread = threading.Thread(target=self.run_scan)
+            thread.daemon = True
+            thread.start()
+            
+        except Exception as e:
+            self.show_error("Hata", f"Tarama başlatılamadı: {str(e)}")
+            self.scan_button.state(['!disabled'])
+            
+    def run_scan(self):
+        """Tarama işlemini yürütür"""
+        try:
+            # Giriş değerlerini al
+            target = self.target_ip.get().strip()
+            port_range = self.port_range.get().strip()
+            scan_type = self.scan_type.get().lower()
+            detect_services = self.service_detect.get()
+            
+            # Port aralığını parse et
+            if '-' in port_range:
+                start_port, end_port = map(int, port_range.split('-'))
+            else:
+                start_port = end_port = int(port_range)
+                
             # Asenkron tarama işlemini başlat
             asyncio.run(self._run_scan_async(target, start_port, end_port, scan_type, detect_services))
             
         except Exception as e:
-            self.logger.error(f"Tarama başlatma hatası: {str(e)}")
-            messagebox.showerror("Hata", f"Tarama başlatılamadı: {str(e)}")
-            self.scan_button.config(state='normal')
-            self.progress.stop()
+            self.show_error("Hata", f"Tarama sırasında hata oluştu: {str(e)}")
+            self.scan_button.state(['!disabled'])
+            self.progress['value'] = 0
             
     async def _run_scan_async(self, target: str, start_port: int, end_port: int, scan_type: str, detect_services: bool):
         """Asenkron tarama işlemini yürütür"""
         try:
+            total_ports = end_port - start_port + 1
+            scanned_ports = 0
+            
             # Port taraması yap
             port_scanner = PortScanner()
-            # Tüm taranmış portları al
-            all_scanned_ports = await port_scanner.scan_ports(target, start_port, end_port, scan_type)
+            all_scanned_ports = {}
             
-            # Açık portları bul (GUI'de göstermek için)
+            # Portları gruplar halinde tara
+            port_groups = [list(range(start_port + i, min(start_port + i + 50, end_port + 1))) 
+                         for i in range(0, total_ports, 50)]
+            
+            for group in port_groups:
+                group_results = await port_scanner.scan_ports(target, group[0], group[-1], scan_type)
+                all_scanned_ports.update(group_results)
+                
+                scanned_ports += len(group)
+                progress = (scanned_ports / total_ports) * 100
+                self.progress['value'] = progress
+                self.update_status(f"Tarama devam ediyor... {progress:.1f}%")
+                
+            # Açık portları bul
             open_ports = {port: state for port, state in all_scanned_ports.items() if state == "open"}
             
             # Servis tespiti yap
             services = {}
             if detect_services and open_ports:
+                self.update_status("Servis tespiti yapılıyor...")
                 service_detector = ServiceDetector()
                 services = await service_detector.detect_services(target, open_ports)
-            
+                
             # OS fingerprinting yap
+            self.update_status("İşletim sistemi tespiti yapılıyor...")
             os_info = await self.os_fingerprinter.detect_os(target)
             
-            # Sonuçları göster (tüm taranmış portları ilet)
+            # Sonuçları göster
             self.show_results(all_scanned_ports, services, os_info, scan_type)
+            self.update_status("Tarama tamamlandı")
+            self.show_info("Bilgi", "Tarama başarıyla tamamlandı")
             
         except Exception as e:
-            self.logger.error(f"Tarama hatası: {str(e)}")
-            messagebox.showerror("Hata", f"Tarama sırasında hata oluştu: {str(e)}")
+            self.show_error("Hata", f"Tarama sırasında hata oluştu: {str(e)}")
             
         finally:
-            self.scan_button.config(state='normal')
-            self.progress.stop()
+            self.scan_button.state(['!disabled'])
+            self.progress['value'] = 0
+            self.report_button.state(['!disabled'])
             
     def show_results(self, ports: Dict[int, str], services: Dict[int, Dict], os_info: Dict, scan_type: str):
         """Tarama sonuçlarını gösterir"""
-        # Port ve servis sonuçlarını göster
-        self.port_text.delete(1.0, tk.END)
-        
-        # Hedef bilgilerini göster
-        target = self.target_ip.get().strip()
-        mac, vendor = get_mac_and_vendor(target)
-        
-        result_text = f"Hedef: {target}\n"
-        if mac:
-            result_text += f"MAC Adresi: {mac}\n"
-            result_text += f"Üretici: {vendor}\n"
-        result_text += "-" * 50 + "\n\n"
-        
-        # OS fingerprinting sonuçlarını göster
-        # Eğer os_info None ise boş bir sözlük olarak ayarla
-        if os_info is None:
-            os_info = {}
-
-        result_text += "İşletim Sistemi Tespiti:\n"
-        result_text += f"OS Adı: {os_info.get('name', 'Bilinmiyor')}\n"
-        result_text += f"Güven Skoru: {os_info.get('confidence', 0):.2f}\n"
-        result_text += f"TTL Analizi: {os_info.get('ttl_analysis', {}).get('os', 'Bilinmiyor')}\n"
-        result_text += f"TCP Stack Analizi: {os_info.get('stack_analysis', {}).get('behavior', 'Bilinmiyor')}\n"
-        result_text += "-" * 50 + "\n\n"
-        
-        # `ports` değişkeni artık `all_scanned_ports` içerir.
-        # GUI'de gösterilecek açık portları buradan türetelim.
-        open_ports_for_display = {port: state for port, state in ports.items() if state == "open"}
-        closed_ports = {port: state for port, state in ports.items() if state == "closed"}
-        filtered_ports = {port: state for port, state in ports.items() if state not in ["open", "closed"]}
-        
-        if open_ports_for_display:
-            result_text += "Açık Portlar:\n"
-            for port, state in open_ports_for_display.items():
-                result_text += f"Port {port}: {state}\n"
+        try:
+            # Port ve servis sonuçlarını göster
+            self.port_text.delete(1.0, tk.END)
             
-            # Eğer services None ise veya boşsa kontrol et
-            if services:
-                result_text += "\nTespit Edilen Servisler:\n"
-                for port, service_info in services.items():
-                    service_name = service_info.get('name', 'unknown')
-                    product = service_info.get('product', '')
-                    version = service_info.get('version', '')
+            # Hedef bilgilerini göster
+            target = self.target_ip.get().strip()
+            mac, vendor = get_mac_and_vendor(target)
+            
+            result_text = f"Hedef: {target}\n"
+            if mac:
+                result_text += f"MAC Adresi: {mac}\n"
+                result_text += f"Üretici: {vendor}\n"
+            result_text += "-" * 50 + "\n\n"
+            
+            # OS fingerprinting sonuçlarını göster
+            if os_info:
+                result_text += "İşletim Sistemi Tespiti:\n"
+                result_text += f"OS Adı: {os_info.get('name', 'Bilinmiyor')}\n"
+                result_text += f"Güven Skoru: {os_info.get('confidence', 0):.2f}\n"
+                result_text += f"TTL Analizi: {os_info.get('ttl_analysis', {}).get('os', 'Bilinmiyor')}\n"
+                result_text += f"TCP Stack Analizi: {os_info.get('stack_analysis', {}).get('behavior', 'Bilinmiyor')}\n"
+                result_text += "-" * 50 + "\n\n"
+            
+            # Port sonuçlarını göster
+            result_text += f"Port Tarama Sonuçları ({scan_type.upper()}):\n"
+            open_count = 0
+            closed_count = 0
+            
+            # Portları sırala ve göster
+            for port, state in sorted(ports.items()):
+                if state == "open":
+                    open_count += 1
+                    service_info = services.get(port, {})
+                    service_name = service_info.get('name', 'bilinmiyor')
+                    service_version = service_info.get('version', 'bilinmiyor')
                     
-                    if service_name != 'unknown':
-                        if product and version and version != 'unknown':
-                            result_text += f"Port {port}: {service_name} ({product} {version})\n"
-                        elif product:
-                            result_text += f"Port {port}: {service_name} ({product})\n"
-                        else:
-                            result_text += f"Port {port}: {service_name}\n"
-                    else:
-                        result_text += f"Port {port}: Bilinmeyen servis\n"
-                        
-                    if service_info.get('banner'):
-                        result_text += f"  Banner: {service_info['banner']}\n"
-        else:
-            result_text += "Açık port bulunamadı.\n"
+                    result_text += f"Port {port}: AÇIK"
+                    if service_name != 'bilinmiyor':
+                        result_text += f" - {service_name}"
+                        if service_version != 'bilinmiyor':
+                            result_text += f" {service_version}"
+                    result_text += "\n"
+                elif state == "closed":
+                    closed_count += 1
             
-        self.port_text.insert(tk.END, result_text)
-        self.report_button.config(state='normal')
+            result_text += f"\nTarama Tamamlandı!\n"
+            result_text += f"Toplam Açık Port: {open_count}\n"
+            result_text += f"Toplam Kapalı Port: {closed_count}\n"
+            result_text += f"Toplam Taranan Port: {len(ports)}\n"
+            
+            self.port_text.insert(tk.END, result_text)
+            
+        except Exception as e:
+            self.show_error("Hata", f"Sonuçlar gösterilirken hata oluştu: {str(e)}")
         
         # scan_results'ı doğru tcp_ports ve udp_ports ile güncelle
         self.scan_results = {
@@ -270,6 +326,64 @@ class NetworkScannerGUI:
             messagebox.showinfo("Başarılı", f"Rapor oluşturuldu: {report_path}")
         except Exception as e:
             messagebox.showerror("Hata", f"Rapor oluşturulurken bir hata oluştu: {str(e)}")
+
+    def start_discovery(self):
+        """Ağ keşfini başlatır"""
+        self.update_status("Ağdaki cihazlar keşfediliyor...")
+        self.progress['value'] = 0
+        self.discover_button['state'] = 'disabled'
+        self.scan_button['state'] = 'disabled'
+        
+        # Asenkron keşif işlemini başlat
+        threading.Thread(target=self._run_discovery_async, daemon=True).start()
+        
+    def _run_discovery_async(self):
+        """Asenkron ağ keşfi işlemini yürütür"""
+        try:
+            # Event loop oluştur
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Ağ keşfini başlat
+            devices = loop.run_until_complete(self.network_discovery.discover_devices())
+            
+            # Sonuçları göster
+            self.root.after(0, lambda: self.show_discovery_results(devices))
+            
+        except Exception as e:
+            self.root.after(0, lambda: self.show_error(f"Ağ keşfi sırasında hata: {str(e)}"))
+        finally:
+            loop.close()
+            self.root.after(0, self._reset_buttons)
+            
+    def show_discovery_results(self, devices: List[Dict]):
+        """Keşfedilen cihazları gösterir"""
+        self.port_text.delete(1.0, tk.END)
+        
+        if not devices:
+            self.port_text.insert(tk.END, "Hiçbir cihaz bulunamadı.\n")
+            return
+            
+        self.port_text.insert(tk.END, f"Keşfedilen Cihazlar ({len(devices)}):\n")
+        self.port_text.insert(tk.END, "=" * 50 + "\n\n")
+        
+        for device in devices:
+            self.port_text.insert(tk.END, f"IP Adresi: {device['ip']}\n")
+            if device['mac']:
+                self.port_text.insert(tk.END, f"MAC Adresi: {device['mac']}\n")
+            if device['vendor']:
+                self.port_text.insert(tk.END, f"Üretici: {device['vendor']}\n")
+            if device['hostname']:
+                self.port_text.insert(tk.END, f"Hostname: {device['hostname']}\n")
+            self.port_text.insert(tk.END, "-" * 30 + "\n\n")
+            
+        self.update_status("Ağ keşfi tamamlandı.")
+        
+    def _reset_buttons(self):
+        """Butonları normal duruma getirir"""
+        self.discover_button['state'] = 'normal'
+        self.scan_button['state'] = 'normal'
+        self.progress['value'] = 0
 
 def main():
     root = tk.Tk()

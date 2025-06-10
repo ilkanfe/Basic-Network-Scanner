@@ -1,7 +1,7 @@
 from scapy.all import *
 import ipaddress
 import logging
-from typing import List, Dict, Tuple, Set
+from typing import List, Dict, Tuple
 import time
 from src.utils.logger import setup_logger
 from src.utils.error_utils import handle_error
@@ -10,69 +10,21 @@ import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import socket
-import aiohttp
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from collections import defaultdict
-
-@dataclass
-class ScanResult:
-    port: int
-    state: str
-    service: str = "unknown"
-    banner: str = ""
-    scan_time: float = 0.0
-
-class ConnectionPool:
-    def __init__(self, max_size: int = 100):
-        self.max_size = max_size
-        self.pool: Dict[str, List[socket.socket]] = defaultdict(list)
-        self.lock = asyncio.Lock()
-        
-    async def get_connection(self, target: str, port: int, protocol: str = "tcp") -> socket.socket:
-        async with self.lock:
-            key = f"{target}:{port}:{protocol}"
-            if self.pool[key]:
-                return self.pool[key].pop()
-            
-            sock = socket.socket(socket.AF_INET, 
-                               socket.SOCK_STREAM if protocol == "tcp" else socket.SOCK_DGRAM)
-            return sock
-            
-    async def release_connection(self, target: str, port: int, protocol: str, sock: socket.socket):
-        async with self.lock:
-            key = f"{target}:{port}:{protocol}"
-            if len(self.pool[key]) < self.max_size:
-                self.pool[key].append(sock)
-            else:
-                sock.close()
-                
-    async def cleanup(self):
-        async with self.lock:
-            for connections in self.pool.values():
-                for sock in connections:
-                    sock.close()
-            self.pool.clear()
 
 class PortScanner:
-    def __init__(self, timeout: float = 1.0, max_workers: int = 50, 
-                 connection_pool_size: int = 100, chunk_size: int = 10):
+    def __init__(self, timeout: float = 1.0, max_workers: int = 50):
         """
         Port tarayıcı sınıfı başlatıcısı.
         
         Args:
             timeout (float): Port tarama timeout süresi (saniye)
             max_workers (int): Maksimum eşzamanlı tarama sayısı
-            connection_pool_size (int): Bağlantı havuzu boyutu
-            chunk_size (int): Port grubu boyutu
         """
         self.logger = setup_logger(__name__)
         self.timeout = timeout
         self.max_workers = max_workers
-        self.chunk_size = chunk_size
-        self.connection_pool = ConnectionPool(max_size=connection_pool_size)
-        self.scan_results: Dict[str, Dict[int, ScanResult]] = defaultdict(dict)
-        self._semaphore = asyncio.Semaphore(max_workers)
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.scan_results = {}
         
     def scan_ip_range(self, ip_range: str) -> List[str]:
         """
@@ -114,8 +66,7 @@ class PortScanner:
             handle_error(self.logger, error_msg)
             raise ValueError(f"IP aralığı taraması başarısız oldu: {str(e)}")
     
-    async def scan_ports(self, target: str, start_port: int, end_port: int, 
-                        scan_type: str = "tcp") -> Dict[int, ScanResult]:
+    async def scan_ports(self, target: str, start_port: int, end_port: int, scan_type: str = "tcp") -> Dict[int, str]:
         """
         Belirtilen port aralığını tarar.
         
@@ -126,7 +77,7 @@ class PortScanner:
             scan_type (str): Tarama tipi ("tcp" veya "udp")
             
         Returns:
-            Dict[int, ScanResult]: Port numaraları ve tarama sonuçları
+            Dict[int, str]: Port numaraları ve durumları
         """
         self.logger.info(f"Port taraması başlatılıyor: {target} ({start_port}-{end_port})")
         
@@ -137,9 +88,9 @@ class PortScanner:
                 raise ValueError("Başlangıç portu bitiş portundan büyük olamaz")
                 
             ports = list(range(start_port, end_port + 1))
-            # Portları daha küçük gruplara böl
-            port_chunks = [ports[i:i + self.chunk_size] for i in range(0, len(ports), self.chunk_size)]
+            port_groups = [ports[i:i + self.max_workers] for i in range(0, len(ports), self.max_workers)]
             
+            results = {}
             total_ports = len(ports)
             scanned_ports = 0
             
@@ -148,116 +99,172 @@ class PortScanner:
             print(f"Port Aralığı: {start_port}-{end_port}")
             print("-" * 50)
             
-            # Her port grubu için tek bir task oluştur
-            tasks = [self._scan_port_chunk(target, chunk, scan_type) for chunk in port_chunks]
-            chunk_results = await asyncio.gather(*tasks)
-            
-            # Sonuçları birleştir
-            for chunk_result in chunk_results:
-                self.scan_results[target].update(chunk_result)
-                scanned_ports += len(chunk_result)
+            for group in port_groups:
+                tasks = [self.scan_port(target, port, scan_type) for port in group]
+                group_results = await asyncio.gather(*tasks)
+                
+                for port, state in zip(group, group_results):
+                    results[port] = state
+                    if state == "open":
+                        print(f"Port {port}: AÇIK")
+                
+                scanned_ports += len(group)
                 progress = (scanned_ports / total_ports) * 100
                 print(f"\rTarama İlerlemesi: {progress:.1f}% ({scanned_ports}/{total_ports})", end="")
             
             print("\n" + "-" * 50)
-            open_count = sum(1 for result in self.scan_results[target].values() if result.state == 'open')
+            open_count = sum(1 for state in results.values() if state == 'open')
             print(f"\nTarama Tamamlandı!")
             print(f"Toplam Açık Port: {open_count}")
-            print(f"Toplam Kapalı Port: {len(self.scan_results[target]) - open_count}")
+            print(f"Toplam Kapalı Port: {len(results) - open_count}")
             
-            return self.scan_results[target]
+            return results
             
         except Exception as e:
             self.logger.error(f"Port taraması sırasında hata: {str(e)}")
             raise
             
-    async def _scan_port_chunk(self, target: str, ports: List[int], 
-                             scan_type: str) -> Dict[int, ScanResult]:
-        """Port grubunu tarar"""
-        results = {}
-        async with self._semaphore:  # Eşzamanlı tarama sayısını sınırla
-            tasks = []
-            for port in ports:
-                task = asyncio.create_task(self._scan_single_port(target, port, scan_type))
-                tasks.append(task)
-            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for port, result in zip(ports, chunk_results):
-                if isinstance(result, Exception):
-                    self.logger.error(f"Port {port} taraması başarısız: {str(result)}")
-                    results[port] = ScanResult(port=port, state="error", scan_time=0.0)
-                else:
-                    results[port] = result
-                    
-        return results
+    async def scan_port(self, target: str, port: int, scan_type: str = "tcp") -> str:
+        """
+        Tek bir portu tarar.
         
-    async def _scan_single_port(self, target: str, port: int, 
-                              scan_type: str) -> ScanResult:
-        """Tek bir portu tarar"""
-        start_time = time.time()
+        Args:
+            target (str): Hedef IP adresi
+            port (int): Port numarası
+            scan_type (str): Tarama tipi ("tcp" veya "udp")
+            
+        Returns:
+            str: Port durumu ("open", "closed", "filtered")
+        """
         try:
             if scan_type == "tcp":
-                state = await self._tcp_connect_scan(target, port)
+                return await self._tcp_connect_scan(target, port)
             elif scan_type == "udp":
-                state = await self._udp_scan(target, port)
+                return await self._udp_scan(target, port)
             else:
                 raise ValueError(f"Geçersiz tarama tipi: {scan_type}")
                 
-            scan_time = time.time() - start_time
-            return ScanResult(port=port, state=state, scan_time=scan_time)
-            
         except Exception as e:
             self.logger.error(f"Port {port} taraması sırasında hata: {str(e)}")
-            return ScanResult(port=port, state="error", scan_time=time.time() - start_time)
+            return "filtered"
             
     async def _tcp_connect_scan(self, target: str, port: int) -> str:
         """TCP Connect taraması yapar"""
-        sock = None
         try:
-            sock = await self.connection_pool.get_connection(target, port, "tcp")
-            sock.settimeout(self.timeout)
-            result = sock.connect_ex((target, port))
-            return "open" if result == 0 else "closed"
+            def scan():
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(self.timeout)
+                result = sock.connect_ex((target, port))
+                sock.close()
+                return "open" if result == 0 else "closed"
+                
+            return await asyncio.get_event_loop().run_in_executor(self.executor, scan)
             
-        except socket.timeout:
-            return "filtered"
         except Exception as e:
             return "filtered"
-        finally:
-            if sock:
-                await self.connection_pool.release_connection(target, port, "tcp", sock)
-                
+            
     async def _udp_scan(self, target: str, port: int) -> str:
         """UDP taraması yapar"""
-        sock = None
         try:
-            sock = await self.connection_pool.get_connection(target, port, "udp")
-            sock.settimeout(self.timeout)
+            def grab():
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(self.timeout)
+                
+                try:
+                    if port == 53:
+                        # DNS sorgusu gönder (örneğin, example.com için A kaydı)
+                        dns_query = b'\xaa\xaa\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01'
+                        sock.sendto(dns_query, (target, port))
+                        data, _ = sock.recvfrom(1024) # Yanıt bekle
+                        return "open" # Yanıt geldiyse açık kabul et
+                    else:
+                        # Diğer UDP portları için boş veri gönder
+                        sock.sendto(b"", (target, port))
+                        data, _ = sock.recvfrom(1024)
+                        return "open"
+                except socket.timeout:
+                    # Zaman aşımı, port açık veya filtrelenmiş olabilir
+                    return "open|filtered"
+                except socket.error as e:
+                    # Socket hatası, genellikle port kapalıdır (ICMP hatası)
+                    # Belirli ICMP hatalarını kontrol edebiliriz, ama şimdilik genel hata kapalı kabul edilebilir.
+                    # Ya da sadece hata durumunda filtered dönelim, GUI bunu daha iyi yorumlar.
+                    # Örneğin, Windows'ta Port Unreachable hatası socket.error olarak gelebilir.
+                    return "closed" # Hata durumunda kapalı kabul edelim
+                finally:
+                    sock.close()
+                    
+            return await asyncio.get_event_loop().run_in_executor(None, grab)
             
-            if port == 53:
-                dns_query = b'\xaa\xaa\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01'
-                sock.sendto(dns_query, (target, port))
-                data, _ = sock.recvfrom(1024)
-                return "open"
-            else:
-                sock.sendto(b"", (target, port))
-                data, _ = sock.recvfrom(1024)
-                return "open"
-                
-        except socket.timeout:
-            return "open|filtered"
-        except socket.error:
-            return "closed"
         except Exception as e:
+            self.logger.error(f"UDP port {port} taraması sırasında hata: {str(e)}")
             return "filtered"
-        finally:
-            if sock:
-                await self.connection_pool.release_connection(target, port, "udp", sock)
+            
+    async def tcp_syn_scan(self, target_ip: str, ports: List[int]) -> Dict[int, str]:
+        """
+        TCP SYN taraması gerçekleştirir.
+        
+        Args:
+            target_ip (str): Hedef IP adresi
+            ports (List[int]): Taranacak port listesi
+            
+        Returns:
+            Dict[int, str]: Açık portlar ve durumları
+        """
+        open_ports = {}
+        
+        for port in ports:
+            syn_packet = IP(dst=target_ip)/TCP(dport=port, flags="S")
+            
+            try:
+                response = await asyncio.get_event_loop().run_in_executor(None, lambda: sr1(syn_packet, timeout=1, verbose=False))
                 
-    async def cleanup(self):
-        """Kaynakları temizle"""
-        await self.connection_pool.cleanup()
-
+                if response and response.haslayer(TCP):
+                    if response[TCP].flags == 0x12:  # SYN-ACK
+                        rst_packet = IP(dst=target_ip)/TCP(dport=port, flags="R")
+                        send(rst_packet, verbose=False)
+                        open_ports[port] = "open"
+                        print(f"Port {port} açık")
+                
+            except Exception as e:
+                continue
+                
+        return open_ports
+    
+    async def udp_scan(self, target_ip: str, ports: List[int]) -> Dict[int, str]:
+        """
+        UDP taraması gerçekleştirir.
+        
+        Args:
+            target_ip (str): Hedef IP adresi
+            ports (List[int]): Taranacak port listesi
+            
+        Returns:
+            Dict[int, str]: Açık portlar ve durumları
+        """
+        open_ports = {}
+        
+        for port in ports:
+            udp_packet = IP(dst=target_ip)/UDP(dport=port)
+            
+            try:
+                response = await asyncio.get_event_loop().run_in_executor(None, lambda: sr1(udp_packet, timeout=1, verbose=False))
+                
+                if response is None:
+                    open_ports[port] = "open|filtered"
+                    self.logger.info(f"Port {port} açık veya filtrelenmiş")
+                elif response.haslayer(ICMP):
+                    if int(response[ICMP].type) == 3 and int(response[ICMP].code) == 3:
+                        open_ports[port] = "closed"
+                    elif int(response[ICMP].type) == 3 and int(response[ICMP].code) in [1,2,9,10,13]:
+                        open_ports[port] = "filtered"
+                
+            except Exception as e:
+                error_msg = f"Port {port} taraması başarısız oldu: {str(e)}"
+                handle_error(self.logger, error_msg)
+                
+        return open_ports
+    
     def validate_ports(self, ports):
         """Port numaralarının geçerli olup olmadığını kontrol eder."""
         for port in ports:
@@ -407,6 +414,10 @@ class PortScanner:
             'filtered_ports': len([p for p, s in results.items() if s == 'filtered']),
             'error_ports': len([p for p, s in results.items() if s == 'error'])
         }
+        
+    def __del__(self):
+        """ThreadPoolExecutor'ı temizle."""
+        self.executor.shutdown(wait=False)
 
     def scan(self, target, ports, scan_type="TCP", service_detection=False):
         """

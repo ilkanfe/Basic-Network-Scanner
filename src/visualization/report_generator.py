@@ -72,7 +72,7 @@ class ReportGenerator:
         
         # Grafik düzenini ayarla
         fig.update_layout(
-            title='Port Tarama Sonuçları',
+            title='Port Scan Results',
             showlegend=False,
             height=400
         )
@@ -110,7 +110,7 @@ class ReportGenerator:
         
         # Grafik düzenini ayarla
         fig.update_layout(
-            title='Servis Dağılımı',
+            title='Service Distribution',
             height=500
         )
         
@@ -133,11 +133,11 @@ class ReportGenerator:
             str: Oluşturulan grafik dosyasının yolu
         """
         # Yöntemlere göre sonuçları hazırla
-        methods = ['TTL Analizi', 'TCP Stack', 'Nmap']
+        methods = ['TTL Analysis', 'TCP Stack', 'Nmap']
         results = [
-            os_results['ttl_analysis'].get('os', 'Bilinmiyor'),
-            os_results['stack_analysis'].get('behavior', 'Bilinmiyor'),
-            os_results['nmap_detection'].get('name', 'Bilinmiyor') if os_results.get('nmap_detection') else 'Bilinmiyor'
+            os_results['ttl_analysis'].get('os', 'Unknown'),
+            os_results['stack_analysis'].get('behavior', 'Unknown'),
+            os_results['nmap_detection'].get('name', 'Unknown') if os_results.get('nmap_detection') else 'Unknown'
         ]
         
         # Plotly ile çubuk grafik oluştur
@@ -152,8 +152,8 @@ class ReportGenerator:
         
         # Grafik düzenini ayarla
         fig.update_layout(
-            title='İşletim Sistemi Tespit Sonuçları',
-            yaxis_title='Başarılı Tespit',
+            title='Operating System Detection Results',
+            yaxis_title='Successful Detection',
             height=400
         )
         
@@ -186,27 +186,27 @@ class ReportGenerator:
         # Özet bölümü
         summary = f"""
         <div class="section">
-            <h2>Özet</h2>
-            <p>Bu rapor, {scan_results.get('target', 'Bilinmiyor')} adresine yapılan tarama sonuçlarını içermektedir.</p>
-            <p>Toplam {len(scan_results.get('tcp_ports', {}))} TCP portu ve {len(scan_results.get('udp_ports', {}))} UDP portu taranmıştır.</p>
-            <p>İşletim sistemi tespiti: {os_results.get('name', 'Bilinmiyor')}</p>
+            <h2>Summary</h2>
+            <p>This report contains the scan results for {scan_results.get('target', 'Unknown')}.</p>
+            <p>Total {len(scan_results.get('tcp_ports', {}))} TCP ports and {len(scan_results.get('udp_ports', {}))} UDP ports were scanned.</p>
+            <p>Operating system detection: {os_results.get('name', 'Unknown')}</p>
         </div>
         """
         
         # Güvenlik önerileri
         security_recommendations = f"""
         <div class="section">
-            <h2>Güvenlik Önerileri</h2>
+            <h2>Security Recommendations</h2>
             <ul>
         """
         
         for port, state in scan_results.get('tcp_ports', {}).items():
             if state == 'open':
-                security_recommendations += f"<li>Port {port} açık. Güvenlik duvarı kurallarını gözden geçirin.</li>"
+                security_recommendations += f"<li>Port {port} is open.</li>"
         
         for port, state in scan_results.get('udp_ports', {}).items():
             if state == 'open':
-                security_recommendations += f"<li>Port {port} açık. Güvenlik duvarı kurallarını gözden geçirin.</li>"
+                security_recommendations += f"<li>Port {port} is open.</li>"
         
         security_recommendations += """
             </ul>
@@ -216,7 +216,7 @@ class ReportGenerator:
         report = f"""
         <html>
         <head>
-            <title>Ağ Tarama Raporu - {timestamp}</title>
+            <title>Network Scan Report - {timestamp}</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
             <style>
                 body {{ font-family: Arial, sans-serif; margin: 20px; }}
@@ -227,30 +227,30 @@ class ReportGenerator:
         </head>
         <body>
             <div class="container">
-                <h1 class="mt-4">Ağ Tarama Raporu</h1>
-                <p>Oluşturulma Tarihi: {timestamp}</p>
+                <h1 class="mt-4">Network Scan Report</h1>
+                <p>Generated At: {timestamp}</p>
                 
                 {summary}
                 
                 <div class="section">
-                    <h2>Port Tarama Sonuçları</h2>
+                    <h2>Port Scan Results</h2>
                     <iframe src="{os.path.basename(port_heatmap)}"></iframe>
                 </div>
                 
                 <div class="section">
-                    <h2>Servis Dağılımı</h2>
+                    <h2>Service Distribution</h2>
                     <iframe src="{os.path.basename(service_pie)}"></iframe>
                 </div>
                 
                 <div class="section">
-                    <h2>İşletim Sistemi Tespiti</h2>
+                    <h2>Operating System Detection</h2>
                     <iframe src="{os.path.basename(os_bar)}"></iframe>
                 </div>
                 
                 {security_recommendations}
                 
                 <div class="section">
-                    <h2>Detaylı Sonuçlar</h2>
+                    <h2>Detailed Results</h2>
                     <pre>{json.dumps(scan_results, indent=2)}</pre>
                     <pre>{json.dumps(services, indent=2)}</pre>
                     <pre>{json.dumps(os_results, indent=2)}</pre>

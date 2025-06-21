@@ -65,7 +65,7 @@ class NetworkScannerGUI:
         
         # Tarama tipi seçimi
         ttk.Label(self.control_frame, text="Tarama Tipi:").grid(row=2, column=0, sticky=tk.W)
-        self.scan_type = ttk.Combobox(self.control_frame, values=["TCP", "UDP", "SYN"], width=27)
+        self.scan_type = ttk.Combobox(self.control_frame, values=["TCP", "UDP"], width=27)
         self.scan_type.grid(row=2, column=1, sticky=tk.W, padx=5)
         self.scan_type.set("TCP")  # Varsayılan tarama tipi
         

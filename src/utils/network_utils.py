@@ -1,6 +1,7 @@
 import ipaddress
 from typing import List
 from datetime import datetime
+import os
 
 
 def is_valid_ip(ip: str) -> bool:
@@ -361,7 +362,7 @@ OUI_VENDOR_DB = {
 }
 
 def get_vendor(mac_address: str) -> str:
-    """MAC adresinden üretici bilgisini döndürür."""
+    """MAC adresinden üretici bilgisini döndürür. Güncel OUI dosyasını kullanır."""
     if not mac_address:
         return "MAC adresi bulunamadı"
     # MAC adresini normalize et: büyük harf, tireleri ve boşlukları iki nokta üst üste ile değiştir
@@ -373,6 +374,24 @@ def get_vendor(mac_address: str) -> str:
     mac = ':'.join(parts)
     # İlk 3 okteti al
     oui = ':'.join(mac.split(':')[:3])
+
+    # Önce güncel OUI dosyasından arama yap
+    oui_txt_path = os.path.join(os.path.dirname(__file__), 'oui.txt')
+    if os.path.exists(oui_txt_path):
+        try:
+            with open(oui_txt_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    if '(hex)' in line:
+                        parts = line.strip().split()
+                        if len(parts) >= 3:
+                            file_oui = parts[0].replace('-', ':').upper()
+                            if file_oui == oui:
+                                # Satırın geri kalanı üretici adı
+                                vendor = ' '.join(parts[2:])
+                                return vendor
+        except Exception:
+            pass
+    # Dosyada bulunamazsa eski sözlükten bak
     return OUI_VENDOR_DB.get(oui, "Üretici bulunamadı")
 
 def get_mac_and_vendor(ip: str, iface: str = None) -> (str, str):

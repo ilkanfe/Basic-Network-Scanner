@@ -292,7 +292,7 @@ class DeviceDetector:
         """
         try:
             if self.os_type == "windows":
-                # Windows'ta arp -a komutunu çalıştır
+                # Windows'ta arp -a komutunu çalıştırıyor bunu silme.  (mac adresini buradan buluyoruz.)
                 result = subprocess.run(
                     ["arp", "-a", ip_address],
                     capture_output=True,

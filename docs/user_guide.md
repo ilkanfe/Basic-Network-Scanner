@@ -66,4 +66,4 @@ print(f'Rapor oluşturuldu: {report_path}')
   - Şu an için sadece komut satırı ve Python API üzerinden kullanılabilir.
 
 ## 6. Destek ve İletişim
-Sorularınız için ekip üyelerine veya [email@example.com] adresine ulaşabilirsiniz. 
+Sorularınız için ekip üyelerine veya [uoilkan@gmail.com] adresine ulaşabilirsiniz. 

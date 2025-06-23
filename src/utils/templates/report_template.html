@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ağ Tarama Raporu</title>
+    <title>Network Scan Report</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -119,40 +119,40 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>Ağ Tarama Raporu</h1>
-            <p>Oluşturulma Tarihi: {{ timestamp }}</p>
+            <h1>Network Scan Report</h1>
+            <p>Generated At: {{ timestamp }}</p>
         </div>
         
         <div class="section">
-            <h2>Tarama Özeti</h2>
+            <h2>Scan Summary</h2>
             <div class="stats">
                 <div class="stat-card">
-                    <h3>Hedef</h3>
+                    <h3>Target</h3>
                     <p>{{ scan_results.target }}</p>
                 </div>
                 <div class="stat-card">
-                    <h3>Toplam Host</h3>
+                    <h3>Total Hosts</h3>
                     <p>{{ scan_results.stats.total_hosts }}</p>
                 </div>
                 <div class="stat-card">
-                    <h3>Aktif Host</h3>
+                    <h3>Active Hosts</h3>
                     <p>{{ scan_results.stats.active_hosts }}</p>
                 </div>
                 <div class="stat-card">
-                    <h3>Tarama Süresi</h3>
-                    <p>{{ "%.2f"|format(scan_results.stats.scan_duration) }} saniye</p>
+                    <h3>Scan Duration</h3>
+                    <p>{{ "%.2f"|format(scan_results.stats.scan_duration) }} seconds</p>
                 </div>
             </div>
         </div>
         
         <div class="section">
-            <h2>İşletim Sistemi Dağılımı</h2>
+            <h2>Operating System Distribution</h2>
             <table>
                 <thead>
                     <tr>
-                        <th>İşletim Sistemi</th>
-                        <th>Host Sayısı</th>
-                        <th>Ortalama Güven</th>
+                        <th>Operating System</th>
+                        <th>Host Count</th>
+                        <th>Average Confidence</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -168,15 +168,15 @@
         </div>
         
         <div class="section">
-            <h2>Port Analizi</h2>
+            <h2>Port Analysis</h2>
             <table>
                 <thead>
                     <tr>
                         <th>Port</th>
-                        <th>Açık</th>
-                        <th>Kapalı</th>
-                        <th>Filtrelenmiş</th>
-                        <th>Servisler</th>
+                        <th>Open</th>
+                        <th>Closed</th>
+                        <th>Filtered</th>
+                        <th>Services</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -194,14 +194,14 @@
         </div>
         
         <div class="section">
-            <h2>Güvenlik Analizi</h2>
+            <h2>Security Analysis</h2>
             <div class="stats">
                 <div class="stat-card">
-                    <h3>Toplam Sorun</h3>
+                    <h3>Total Issues</h3>
                     <p>{{ scan_results.analysis.security_analysis.total_issues }}</p>
                 </div>
                 <div class="stat-card">
-                    <h3>Etkilenen Host</h3>
+                    <h3>Affected Hosts</h3>
                     <p>{{ scan_results.analysis.security_analysis.hosts_with_issues }}</p>
                 </div>
             </div>
@@ -216,10 +216,10 @@
                 <p>Port: {{ issue.port }}</p>
                 {% endif %}
                 {% if issue.service %}
-                <p>Servis: {{ issue.service }}</p>
+                <p>Service: {{ issue.service }}</p>
                 {% endif %}
                 {% if issue.version %}
-                <p>Versiyon: {{ issue.version }}</p>
+                <p>Version: {{ issue.version }}</p>
                 {% endif %}
             </div>
             {% endfor %}
@@ -227,18 +227,18 @@
         </div>
         
         <div class="section">
-            <h2>Detaylı Host Bilgileri</h2>
+            <h2>Detailed Host Information</h2>
             {% for host in scan_results.hosts %}
             <h3>Host: {{ host.ip }}</h3>
-            <p>İşletim Sistemi: {{ host.os_info.name }} (Güven: {{ "%.2f"|format(host.os_info.confidence) }})</p>
+            <p>Operating System: {{ host.os_info.name }} (Confidence: {{ "%.2f"|format(host.os_info.confidence) }})</p>
             
             <table>
                 <thead>
                     <tr>
                         <th>Port</th>
-                        <th>Durum</th>
-                        <th>Servis</th>
-                        <th>Versiyon</th>
+                        <th>Status</th>
+                        <th>Service</th>
+                        <th>Version</th>
                         <th>Banner</th>
                     </tr>
                 </thead>
@@ -258,7 +258,7 @@
         </div>
         
         <div class="footer">
-            <p>Bu rapor otomatik olarak oluşturulmuştur.</p>
+            <p>This report was generated automatically.</p>
         </div>
     </div>
 </body>
